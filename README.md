@@ -398,7 +398,9 @@ sh tools/preview/render.sh ok /tmp/other.json /tmp/air.json   # 换数据源渲�
 |---|---|
 | 画面上下颠倒 | 改 `src/main.cpp` 里 `DisplayTarget` 的 orientation（`PortraitInverted`） |
 | 地名显示成方块 | 把字加到 `tools/charset_extra.txt`，跑 `tools/gen_all.sh`（脚本会校验覆盖） |
+| `pio run -t upload` 报 `ModuleNotFoundError: No module named 'littlefs'` | pioarduino 平台的 `builder/main.py` **顶层**就 `from littlefs import …`（还有 `fatfs`、`yaml`），而 pio 自带的解释器可能缺这几个包（Homebrew 装的 PlatformIO 上尤其常见，安装时它们还被放错过目录）。两条路任选：<br>① 用自带 penv 的 core 目录（本仓库的 `.pio-core` 就是）：`PLATFORMIO_CORE_DIR=$PWD/../.pio-core pio run -t upload`；<br>② 直接给 pio 用的解释器补包：<br>`$(head -1 "$(command -v pio)" | sed 's/^#!//') -m pip install littlefs-python fatfs-ng pyyaml` |
 | `pio run -t upload` 报端口不存在 | 深睡时 USB 会断电消失，属正常：按电源键唤醒后立刻烧，或用 `tools/flash_when_awake.sh` |
+| upload 打开了蓝牙耳机之类的串口 | PlatformIO 默认取**第一个** `/dev/cu.*`，Mac 上常常是蓝牙音频端点。本工程的 `tools/pio_upload_port.py`（`extra_scripts`）会自动锁定 `/dev/cu.usbmodem*`；要手动指定就 `--upload-port /dev/cu.usbmodem201301` |
 | `pio device monitor` 老是断开重连 | 同上，每轮唤醒 USB CDC 都会重新枚举 |
 | 一直“无法连接 WiFi” | X4 只支持 2.4 GHz；确认 `include/secrets.h` 里的账号密码 |
 | 深睡后不自动醒 | 看串口有没有 `deep sleep N min` 日志；确认电量，以及 `WEATHER_REFRESH_MINUTES` 不为 0 |
