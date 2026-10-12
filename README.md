@@ -408,7 +408,7 @@ sh tools/preview/render.sh ok /tmp/other.json /tmp/air.json   # 换数据源渲�
 
 ## 15. 许可与致谢
 
-- 本目录代码：随 FreeInk SDK 的 MIT 许可分发。
+- 本目录代码：MIT 许可（见 [LICENSE](LICENSE)，与本 SDK 同为 MIT）。
 - 位图字体：由 **Noto Sans SC**（SIL OFL 1.1）栅格化而来，仓库内保存的是位图数组。
 - 天气图标：`tools/gen_icons.py` 用几何图元现画，无第三方素材。
 - 深睡/唤醒的 SoC 差异（C3 的 GPIO 唤醒源 vs Xtensa 的 ext1）由 SDK 的 `PowerManager`
