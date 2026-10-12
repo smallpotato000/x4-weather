@@ -1,0 +1,125 @@
+#pragma once
+
+// Weather data model + WMO weather-code mapping.
+//
+// Freestanding (no Arduino dependency) so the same code compiles in the
+// firmware and in the host render preview under tools/preview.
+
+#include <stddef.h>
+#include <stdint.h>
+
+namespace weather {
+
+// How many forecast days the UI shows (the Open-Meteo daily arrays are parsed
+// into at most this many entries).
+static constexpr uint8_t kForecastDays = 3;
+
+// How many hourly entries the "hourly" page lists.
+static constexpr uint8_t kForecastHours = 12;
+
+struct CurrentWeather {
+  bool valid = false;
+  char time[20] = {0};  // local ISO-8601, "2026-10-12T16:30"
+  float temperatureC = 0.0f;
+  float apparentC = 0.0f;
+  float windKph = 0.0f;
+  uint8_t humidity = 0;   // %
+  uint8_t code = 0;       // WMO weather code
+  bool isDay = true;
+};
+
+struct DailyForecast {
+  bool valid = false;
+  char date[11] = {0};  // "2026-10-12"
+  uint8_t code = 0;
+  float tMin = 0.0f;
+  float tMax = 0.0f;
+};
+
+struct HourlyForecast {
+  bool valid = false;
+  char time[20] = {0};                 // "2026-10-12T18:00"
+  float temperatureC = 0.0f;
+  uint8_t code = 0;
+  uint8_t precipitationChance = 0;     // %
+};
+
+// Air quality (Open-Meteo's air-quality API). EAQI is the European AQI index;
+// the pollutant values are µg/m³.
+struct AirQuality {
+  bool valid = false;
+  char time[20] = {0};
+  int europeanAqi = 0;
+  float pm25 = 0.0f;
+  float pm10 = 0.0f;
+  float no2 = 0.0f;
+  float ozone = 0.0f;
+};
+
+struct WeatherReport {
+  bool ok = false;
+  char place[32] = {0};  // display name from config (UTF-8)
+  CurrentWeather current;
+  DailyForecast days[kForecastDays];
+  uint8_t dayCount = 0;
+  HourlyForecast hours[kForecastHours];
+  uint8_t hourCount = 0;
+  AirQuality air;
+  // Epoch seconds of the local fetch time (0 when the clock was not set).
+  uint32_t fetchedEpoch = 0;
+};
+
+// Coarse icon selection for the panel.
+enum class Icon : uint8_t {
+  Unknown,
+  ClearDay,
+  ClearNight,
+  PartlyDay,
+  PartlyNight,
+  Cloudy,
+  Fog,
+  Drizzle,
+  Rain,
+  Snow,
+  Thunder,
+};
+
+// UTF-8 Chinese description for a WMO weather code.
+const char* conditionText(uint8_t wmoCode);
+
+// Icon for a WMO code; `isDay` only changes clear/partly-cloudy results.
+Icon conditionIcon(uint8_t wmoCode, bool isDay);
+
+// 今天 / 明天 / 后天 for forecast row 0..2.
+const char* dayLabel(uint8_t index);
+
+// Chinese level text for a European AQI value (优 / 良 / 轻度污染 / ...).
+const char* aqiLevelText(int europeanAqi);
+
+// 0..5 level bucket for that value (drives the segmented scale on the AQI page).
+uint8_t aqiLevelIndex(int europeanAqi);
+
+// "18:00" from an ISO timestamp; empty string when malformed.
+const char* formatHourLabel(const char* iso, char* out, size_t outLen);
+
+// 周日..周六 for tm_wday-style 0..6.
+const char* weekdayName(int wday);
+
+// Weekday (0 = Sunday) for an ISO date string "YYYY-MM-DD"; -1 when malformed.
+int weekdayFromIsoDate(const char* iso);
+
+// "HH:MM" for an epoch-second local timestamp; falls back to "--:--" when the
+// clock is unset (epoch == 0). Returns `out`.
+const char* formatClock(uint32_t epoch, char* out, size_t outLen);
+
+// Rounds to one decimal and prints it into `out` (no stdio float formatting in
+// the firmware build). Returns `out`.
+const char* formatTemp1(float celsius, char* out, size_t outLen);
+
+// Rounds to a whole number (wind speed display).
+const char* formatWhole(float value, char* out, size_t outLen);
+
+// Short date for a forecast row: "10-12". Empty string when malformed.
+const char* formatShortDate(const char* iso, char* out, size_t outLen);
+
+}  // namespace weather
