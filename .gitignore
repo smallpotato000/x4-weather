@@ -1,0 +1,13 @@
+# 构建与生成产物
+.pio/
+build/
+
+# 本地密钥（WiFi 账号密码）
+include/secrets.h
+include/secrets.h.bak
+
+# 生成字体用的源 TTF（约 17 MB，见 tools/fonts/README.md 的下载命令）
+tools/fonts/*.ttf
+tools/fonts/*.otf
+
+.DS_Store

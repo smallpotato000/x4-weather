@@ -1,0 +1,16 @@
+# Xteink X4 (ESP32-C3, 16 MB flash) partition layout — no OTA.
+#
+# Single 4 MB application slot (the firmware is ~1.27 MB with WiFi + TLS + the
+# UI), the SDK's NVS and PHY areas at their stock offsets, and the remaining
+# ~11.9 MB left as SPIFFS storage for future use (fonts, cached pages, ...).
+#
+# A 64 KB coredump partition right after the app: a crash leaves a backtrace on
+# flash for `esptool` / `pio device monitor` instead of vanishing, and (unlike
+# pointing at the OEM's stale dump) an erased partition keeps the boot log quiet.
+#
+# Name,     Type, SubType,   Offset,   Size,     Flags
+nvs,        data, nvs,       0x9000,   0x5000,
+phy_init,   data, phy,       0xE000,   0x1000,
+app0,       app,  factory,   0x10000,  0x400000,
+coredump,   data, coredump,  0x410000, 0x10000,
+storage,    data, spiffs,    0x420000, 0xBE0000,

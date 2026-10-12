@@ -1,0 +1,9 @@
+# Extra characters baked into the sparse CJK font.
+#
+# tools/gen_fonts.py scans the project sources for non-ASCII characters
+# automatically, so every label the firmware prints is covered. Add anything
+# that is NOT a literal in the sources here — typically the city/place name you
+# set in include/config.h (WEATHER_PLACE), which is compiled in as a macro.
+#
+# One line, any order; whitespace and duplicates are ignored.
+上海 北京 广州 深圳 杭州 成都 重庆 天津 武汉 西安 南京 苏州 青岛 大连 厦门 长沙 郑州 沈阳 昆明 合肥 福州 济南 哈尔滨 乌鲁木齐 拉萨 海口 三亚 香港 澳门 台北
