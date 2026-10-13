@@ -24,11 +24,14 @@ static constexpr freeink::ui::FontId kFontBody = 0;   // bundled Noto Sans, 24 p
 static constexpr freeink::ui::FontId kFontTitle = 1;  // WeatherTitle, 34 px
 static constexpr freeink::ui::FontId kFontBig = 2;    // WeatherDigits, 112 px
 
+// Display order: the crypto board first (it is the page the device wakes up on),
+// then the weather pages. References elsewhere are by name, so this order is the
+// single place to change it.
 enum class Page : uint8_t {
-  Now = 0,
-  Hourly = 1,
-  AirQuality = 2,
-  Crypto = 3,
+  Crypto = 0,
+  Now = 1,
+  Hourly = 2,
+  AirQuality = 3,
 };
 static constexpr uint8_t kPageCount = 4;
 
@@ -39,8 +42,10 @@ struct ScreenState {
   const WeatherReport* report = nullptr;
   const char* place = nullptr;   // header label when the report has no place yet
   const char* status = nullptr;  // footer line (UTF-8), may be nullptr
-  Page page = Page::Now;
+  Page page = Page::Crypto;
   CryptoSort cryptoSort = CryptoSort::Table;  // row order on the crypto page
+  bool batteryKnown = false;     // header battery: read from the board's ADC
+  uint8_t batteryPercent = 0;
   const char* hint = nullptr;    // footer hint; defaults to the paging hint
   bool busy = false;             // first fetch in flight -> placeholder screen
   bool interactive = false;      // buttons are live -> show the paging hint

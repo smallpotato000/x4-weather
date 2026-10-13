@@ -19,6 +19,7 @@ VARIANT="${1:-ok}"
 RESPONSE="${2:-tools/preview/sample_response.json}"
 AIR="${3:-tools/preview/sample_air_quality.json}"
 CRYPTO="${4:-tools/preview/sample_crypto.json}"
+BATTERY="${5:-82}"   # 预览用的电量百分比（负数 = 不显示电量）
 SDK="${FREEINK_SDK:-../freeink-sdk}"
 PY="${PREVIEW_PYTHON:-python3}"
 OUT_DIR="build/preview"
@@ -32,6 +33,6 @@ c++ -std=c++17 -O1 -Wall -Wextra \
   tools/preview/render_preview.cpp \
   -o "$OUT_DIR/render_preview"
 
-"$OUT_DIR/render_preview" "$OUT_DIR/$VARIANT.pbm" "$VARIANT" "$RESPONSE" "$AIR" "$CRYPTO"
+"$OUT_DIR/render_preview" "$OUT_DIR/$VARIANT.pbm" "$VARIANT" "$RESPONSE" "$AIR" "$CRYPTO" "$BATTERY"
 
 "$PY" tools/preview/to_png.py "$OUT_DIR/$VARIANT.pbm" "$OUT_DIR/${VARIANT}_native.png" "$OUT_DIR/${VARIANT}_portrait.png"

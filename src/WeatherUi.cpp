@@ -134,7 +134,26 @@ void drawTrendMarker(DisplayTarget& target, int16_t centerX, int16_t centerY, fl
 
 // --- shared chrome ----------------------------------------------------------
 
-void drawHeader(DisplayTarget& target, const WeatherReport* report, const char* place) {
+// Outlined battery with a proportional fill, drawn in the header's ink.
+void drawBatteryGlyph(DisplayTarget& target, int16_t x, int16_t y, uint8_t percent) {
+  const Paint ink = Paint::solid(Color::White);
+  constexpr int16_t kBodyWidth = 34;
+  constexpr int16_t kBodyHeight = 17;
+  target.stroke(Rect{x, y, kBodyWidth, kBodyHeight}, ink, 2);
+  target.fill(Rect{static_cast<int16_t>(x + kBodyWidth + 1), static_cast<int16_t>(y + 5), 3, 7}, ink);
+
+  const uint8_t level = percent > 100 ? 100 : percent;
+  const int16_t inner = static_cast<int16_t>((kBodyWidth - 8) * level / 100);
+  if (inner > 0) {
+    target.fill(Rect{static_cast<int16_t>(x + 4), static_cast<int16_t>(y + 4), inner,
+                     static_cast<int16_t>(kBodyHeight - 8)},
+                ink);
+  }
+}
+
+void drawHeader(DisplayTarget& target, const ScreenState& state) {
+  const WeatherReport* report = state.report;
+  const char* place = state.place;
   target.fill(Rect{0, 0, kWidth, kHeaderBottom}, Paint::solid(Color::Black));
 
   const char* label = nullptr;
@@ -145,7 +164,8 @@ void drawHeader(DisplayTarget& target, const WeatherReport* report, const char* 
   } else {
     label = "天气";
   }
-  drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, kMargin, 62, label, TextAlign::Left, 260,
+  // The right column carries the date and the battery, so the place gets the rest.
+  drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, kMargin, 62, label, TextAlign::Left, 240,
            Color::White);
 
   const char* observed = nullptr;
@@ -161,8 +181,17 @@ void drawHeader(DisplayTarget& target, const WeatherReport* report, const char* 
     copyIsoDate(observed, date, sizeof(date));
     formatShortDate(date, shortDate, sizeof(shortDate));
     snprintf(dateLabel, sizeof(dateLabel), "%s %s", shortDate, weekdayName(weekdayFromIsoDate(date)));
-    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 170, 62, dateLabel, TextAlign::Right,
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 170, 44, dateLabel, TextAlign::Right,
              170, Color::White);
+  }
+
+  if (state.batteryKnown) {
+    char battery[8];
+    snprintf(battery, sizeof(battery), "%u%%", static_cast<unsigned>(state.batteryPercent));
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 62, 84, battery,
+             TextAlign::Right, 62, Color::White);
+    drawBatteryGlyph(target, static_cast<int16_t>(kWidth - kMargin - 62 - 6 - 34), 76,
+                     state.batteryPercent);
   }
 }
 
@@ -531,7 +560,7 @@ void renderWeatherScreen(DisplayTarget& target, const ScreenState& state) {
   const WeatherReport* report = state.report;
   const bool hasData = report != nullptr && report->ok && report->current.valid;
 
-  drawHeader(target, report, state.place);
+  drawHeader(target, state);
   drawFooter(target, state);
 
   if (report == nullptr || (!hasData && state.page == Page::Now)) {

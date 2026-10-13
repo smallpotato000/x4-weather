@@ -4,9 +4,10 @@
 [FreeInk SDK](../freeink-sdk) 开发：醒来 → 连 WiFi → 取回**武汉**的当前天气和未来
 三天预报 → 以 **480×800 竖屏**渲染并整屏刷新 → 关射频、关面板、进入 **deep sleep**，
 **30 分钟**后由 RTC 定时器唤醒，如此循环。深睡期间墨水屏保持最后一帧画面；
-按一下电源键立刻唤醒并进入**交互会话**，左右键可在**当前 / 逐小时 / 空气质量 / 数字货币**四页之间切换，
+按一下电源键立刻唤醒并进入**交互会话**，左右键可在**数字货币 / 当前 / 逐小时 / 空气质量**四页之间切换，
 长按电源键则关机。定位只要写城市名（Open-Meteo geocoding 自动解析坐标），
-行情页显示 BTC/ETH/XRP/BNB/SOL/TRX/XMR 对美元的实时价格与 24 小时涨跌。
+第一页是 BTC/ETH/XRP/BNB/SOL/TRX/XMR 对美元的价格、24 小时涨跌与 7 天走势，
+顶部黑条右侧常驻**日期与电池电量**。
 
 ![竖屏效果](docs/preview-portrait.png)
 
@@ -38,7 +39,8 @@
 
 ## 2. 按键与四个页面
 
-屏幕有四页，左右键翻页，页号显示在底栏右侧（如 `2/4`）：
+屏幕有四页，**数字货币在前、天气在后**，左右键翻页，页号显示在底栏右侧（如 `2/4`）。
+顶部黑条右侧固定显示**日期 + 电池电量**（16 级量化的电量条 + 百分比）。
 
 | 按键 | 作用 |
 |---|---|
@@ -49,25 +51,25 @@
 | 返回 | 结束会话，马上休眠 |
 | 电源键（长按 2.5 s） | 关机：电池供电时真的断电；USB 供电时进入“关机＝深睡”，再按电源键唤醒 |
 
-**第 1 页 · 当前 + 三天**（常驻画面）
-
-![当前](docs/preview-portrait.png)
-
-**第 2 页 · 未来 12 小时**（时刻 / 图标 / 天气 / 降水概率（>0 才显示）/ 气温）
-
-![逐小时](docs/preview-hourly.png)
-
-**第 3 页 · 空气质量**（欧洲 AQI + 六段色阶 + PM2.5 / PM10 / 臭氧 / 二氧化氮）
-
-![空气质量](docs/preview-aqi.png)
-
-**第 4 页 · 数字货币**（BTC / ETH / XRP / BNB / SOL / TRX / XMR 兑美元，24 小时涨跌 + **7 天走势小折线**）
+**第 1 页 · 数字货币**（BTC / ETH / XRP / BNB / SOL / TRX / XMR 兑美元，24 小时涨跌 + **7 天走势小折线**）
 
 ![数字货币](docs/preview-crypto.png)
 
 在行情页按**上/下**切换排序（表序 → 涨幅榜 → 跌幅榜，选择会记住），效果：
 
 ![行情·涨幅榜](docs/preview-crypto-gainers.png)
+
+**第 2 页 · 当前 + 三天**（天气主画面）
+
+![当前](docs/preview-portrait.png)
+
+**第 3 页 · 未来 12 小时**（时刻 / 图标 / 天气 / 降水概率（>0 才显示）/ 气温）
+
+![逐小时](docs/preview-hourly.png)
+
+**第 4 页 · 空气质量**（欧洲 AQI + 六段色阶 + PM2.5 / PM10 / 臭氧 / 二氧化氮）
+
+![空气质量](docs/preview-aqi.png)
 
 - 价格带千分位、小数位自适应；▲▼ 表示 24 小时方向；折线框里的虚线是 7 天前的开盘价（基准线）；
 - **两个源分工**：价格与 24 小时涨跌来自 **CoinLore**（`/api/ticker/?id=...`，**一个请求拿全 7 个币**，
@@ -77,6 +79,17 @@
   所以它的行显示价格与涨跌 + 「无走势」——**宁可不画，也不画错**；
 - 想换币种或数据源：改 `src/WeatherData.cpp` 的 `kCoins` 表（符号 / 中文名 / CoinLore id / Gate 币对）
   与 `WeatherClient::fetchCrypto()` 的 URL，解析器不用动。
+
+### 电池电量
+
+顶部黑条右侧是**电量条 + 百分比**，每轮唤醒读一次：
+
+- X4 的电池电压走 **ADC**（`BoardProfile.batteryAdc`，2:1 分压），SDK 的 `BatteryMonitor`
+  用一条标准 1S 锂电放电曲线换算成百分比；
+- 百分比是 **10% 的整数倍**——电压分辨不出更细，硬要显示到 1% 只会得到来回跳的数字
+  （SDK 的原话，我照做了）；
+- X4 没有充电状态脚、也没有 I²C 电量计（`batteryChargeStatus = PIN_UNASSIGNED`、`NO_GAUGE`），
+  所以**不显示充电中**；读不到时那一行就不画（而不是画 0%）。
 
 > **数据源是按"设备能不能直连"挑的，不是按名气。** 开发这台 Mac 走代理
 > （`127.0.0.1:3067`，TUN 模式），ESP32-C3 没有代理，所以**在 Mac 上 curl 通 ≠ 设备通**。
@@ -162,7 +175,7 @@ cycle period ≈ 68.6 s = 60 s 深睡 + 8.6 s 活跃
   屏幕引脚、按键、电源锁存全部由 SDK 的板级 profile 提供，固件里没有硬编码引脚。
   实测机型：ESP32-C3 (QFN32) rev v0.4，16 MB flash，USB-Serial/JTAG。
 - [FreeInk SDK](../freeink-sdk)（本仓库默认从同级目录 `../freeink-sdk` 读取）：
-  `BoardConfig` / `EInkDisplay` / `PowerManager` / `FreeInkUI` / `JsonSax`
+  `BatteryMonitor` / `BoardConfig` / `EInkDisplay` / `PowerManager` / `FreeInkUI` / `JsonSax`
 - [PlatformIO Core](https://docs.platformio.org/en/latest/core/index.html)（`pio`）；
   `platformio.ini` 使用 pioarduino 的 Arduino-ESP32 3.3.x 平台包
 
@@ -416,11 +429,12 @@ PREVIEW_PYTHON=/path/to/python sh tools/test_host.sh
    体感 29.5° …）就是真机当时显示的内容——和实机日志里的 `28.4 C, code 1` 完全对得上。
 
 ```sh
-sh tools/preview/render.sh ok                         # 第 1 页：当前 + 三天
-sh tools/preview/render.sh hourly                     # 第 2 页：未来 12 小时
-sh tools/preview/render.sh aqi                        # 第 3 页：空气质量
-sh tools/preview/render.sh crypto                     # 第 4 页：数字货币（表序）
-sh tools/preview/render.sh crypto-gainers            # 第 4 页：涨幅榜
+sh tools/preview/render.sh ok                         # 第 2 页：当前 + 三天
+sh tools/preview/render.sh hourly                     # 第 3 页：未来 12 小时
+sh tools/preview/render.sh aqi                        # 第 4 页：空气质量
+sh tools/preview/render.sh crypto                     # 第 1 页：数字货币（表序）
+sh tools/preview/render.sh crypto-gainers            # 行情页：涨幅榜
+sh tools/preview/render.sh ok "" "" "" 15            # 最后一档参数是表头电量（负数=不显示）
 sh tools/preview/render.sh busy                       # 冷启动联网中的占位画面
 sh tools/preview/render.sh error                      # 取数失败
 sh tools/preview/render.sh ok /tmp/other.json /tmp/air.json   # 换数据源渲染

@@ -18,6 +18,7 @@
 // is the whole program and loop() is only a safety net.
 
 #include <Arduino.h>
+#include <BatteryMonitor.h>
 #include <BoardConfig.h>
 #include <EInkDisplay.h>
 #include <InputManager.h>
@@ -67,6 +68,11 @@ RTC_DATA_ATTR uint8_t cryptoSortIndex = 0;
 // The EInkDisplay constructor still takes pins for source compatibility, but
 // begin() reads the active board profile (Xteink X4: SCLK 8 / MOSI 10 / CS 21 /
 // DC 4 / RST 5 / BUSY 6).
+// Battery telemetry path comes from the active board profile (X4: an ADC pin
+// behind a 2:1 divider; the SDK turns millivolts into a percentage off a 1S
+// Li-ion curve, quantised to 10% because voltage cannot resolve it finer).
+BatteryMonitor batteryMonitor;
+
 EInkDisplay display(BoardConfig::DEFAULT_DEVICE.display.sclk,
                     BoardConfig::DEFAULT_DEVICE.display.mosi,
                     BoardConfig::DEFAULT_DEVICE.display.cs,
@@ -102,6 +108,8 @@ char statusLine[64] = {0};
 char displayPlace[32] = {0};  // header label: config name, else the geocoded one
 weather::GeoLocation location;
 bool haveReport = false;
+bool batteryKnown = false;
+uint8_t batteryPercent = 0;
 bool firstAttemptDone = false;
 bool coldBoot = true;
 bool sessionActive = false;  // buttons live -> show the paging hint
@@ -119,6 +127,8 @@ void paint(EInkDisplay::RefreshMode mode) {
   state.busy = !firstAttemptDone;
   state.interactive = sessionActive;
   state.cryptoSort = static_cast<weather::CryptoSort>(cryptoSortIndex);
+  state.batteryKnown = batteryKnown;
+  state.batteryPercent = batteryPercent;
   char hintLine[40];
   if (page == weather::Page::Crypto) {
     // On the crypto page up/down re-order the rows instead of paging.
@@ -179,6 +189,22 @@ bool powerKeyHeldForPowerOff() {
   Serial.printf("[weather] off (wake #%u)\n", static_cast<unsigned>(wakeCount));
   Serial.flush();
   freeink::PowerManager::deepSleep();  // no timer: only the power key comes back
+}
+
+// --- battery ----------------------------------------------------------------
+
+void refreshBattery() {
+  const BatteryMonitor::Status status = batteryMonitor.readStatus();
+  if (status.supported && status.percentageKnown) {
+    batteryPercent = static_cast<uint8_t>(status.percentage > 100 ? 100 : status.percentage);
+    batteryKnown = true;
+  }
+  if (status.millivoltsKnown) {
+    Serial.printf("[weather] battery %u mV, %u%%\n", static_cast<unsigned>(status.millivolts),
+                  static_cast<unsigned>(batteryPercent));
+  } else {
+    Serial.println("[weather] battery not readable on this board");
+  }
 }
 
 // --- location ---------------------------------------------------------------
@@ -386,6 +412,8 @@ uint32_t runCycle(bool isColdBoot) {
   Serial.printf("[weather] refreshing (wake #%u, heap %u B free)\n", static_cast<unsigned>(wakeCount),
                 static_cast<unsigned>(ESP.getFreeHeap()));
 
+  refreshBattery();
+
   uint32_t sleepMinutes = WEATHER_REFRESH_MINUTES;
   bool shouldPaint = true;
 
@@ -447,6 +475,7 @@ int waitForAnyButton(uint32_t timeoutMs) {
 // the three screens, confirm re-fetches, back sleeps immediately. Leaves the
 // selected page as a clean standing image (FULL_REFRESH) before returning.
 void interactiveSession(int initialButton) {
+  refreshBattery();
   sessionActive = true;
   Serial.printf("[weather] interactive session (%u s)\n", static_cast<unsigned>(WEATHER_INTERACTIVE_SECONDS));
   paint(EInkDisplay::FULL_REFRESH);  // repaint with the paging hint

@@ -145,6 +145,7 @@ int main(int argc, char** argv) {
   const char* responsePath = argc > 3 ? argv[3] : nullptr;
   const char* airPath = argc > 4 ? argv[4] : nullptr;
   const char* cryptoPath = argc > 5 ? argv[5] : nullptr;
+  const int batteryPercent = argc > 6 ? std::atoi(argv[6]) : 82;
 
   // formatClock()/mktime() must agree on the wall clock the response carries.
   setenv("TZ", "UTC0", 1);
@@ -167,6 +168,9 @@ int main(int argc, char** argv) {
   state.page = hourlyPage ? weather::Page::Hourly
                           : (airPage ? weather::Page::AirQuality
                                      : (cryptoPage ? weather::Page::Crypto : weather::Page::Now));
+  state.batteryKnown = batteryPercent >= 0;
+  state.batteryPercent = static_cast<uint8_t>(batteryPercent < 0 ? 0 : batteryPercent);
+
   // The extra pages are only reachable during a button session, so they are
   // previewed with the paging hint visible.
   state.interactive = hourlyPage || airPage || cryptoPage;

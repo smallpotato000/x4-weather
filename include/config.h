@@ -89,7 +89,7 @@
 #define WEATHER_FORECAST_HOURS 12
 #endif
 
-// 冷启动（上电/复位/烧录后）先显示哪一页：0 当前 / 1 逐小时 / 2 空气质量 / 3 数字货币。
+// 冷启动（上电/复位/烧录后）先显示哪一页：0 数字货币 / 1 当前天气 / 2 逐小时 / 3 空气质量。
 // 深睡唤醒不受影响——那会继续显示你上次看的那一页。
 #ifndef WEATHER_DEFAULT_PAGE
 #define WEATHER_DEFAULT_PAGE 0
