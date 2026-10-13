@@ -6,18 +6,20 @@
 
 namespace weather {
 
-// Crypto page table: symbol, Chinese name, data-source id (CoinCodex uses the
-// plain symbol). Keep the order — it is the display order, and kCoinCount sizes
-// the quote array.
+// Crypto page table: symbol, Chinese name, CoinLore id, Gate.io pair. Keep the
+// order — it is the display order, and kCoinCount sizes the quote array. XMR has
+// no pair: the exchanges reachable without a proxy from here do not list it
+// any more (Binance delisted it in 2024, Gate never had it), so its row shows a
+// price and a 24 h change but no sparkline.
 namespace {
 const CoinInfo kCoins[kCoinCount] = {
-    {"BTC", "比特币", "BTC"},
-    {"ETH", "以太坊", "ETH"},
-    {"XRP", "瑞波币", "XRP"},
-    {"BNB", "币安币", "BNB"},
-    {"SOL", "Solana", "SOL"},
-    {"TRX", "波场", "TRX"},
-    {"XMR", "门罗币", "XMR"},
+    {"BTC", "比特币", "90", "BTC_USDT"},
+    {"ETH", "以太坊", "80", "ETH_USDT"},
+    {"XRP", "瑞波币", "58", "XRP_USDT"},
+    {"BNB", "币安币", "2710", "BNB_USDT"},
+    {"SOL", "Solana", "48543", "SOL_USDT"},
+    {"TRX", "波场", "2713", "TRX_USDT"},
+    {"XMR", "门罗币", "28", nullptr},
 };
 }  // namespace
 
@@ -35,6 +37,14 @@ int coinIndexForApiId(const char* apiId) {
   if (apiId == nullptr) return -1;
   for (uint8_t i = 0; i < kCoinCount; ++i) {
     if (strcmp(kCoins[i].apiId, apiId) == 0) return static_cast<int>(i);
+  }
+  return -1;
+}
+
+int coinIndexForSymbol(const char* symbol) {
+  if (symbol == nullptr) return -1;
+  for (uint8_t i = 0; i < kCoinCount; ++i) {
+    if (strcmp(kCoins[i].symbol, symbol) == 0) return static_cast<int>(i);
   }
   return -1;
 }

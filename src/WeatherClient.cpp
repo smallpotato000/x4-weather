@@ -173,6 +173,9 @@ bool WeatherClient::fetchAirQuality(AirQuality& out) {
   return true;
 }
 
+// Sources are chosen for reachability without a proxy from mainland China
+// networks (verified from the device itself): CoinCodex and CoinGecko answer 403
+// / time out there, while CoinLore and Gate.io work.
 bool WeatherClient::fetchCrypto(CryptoBoard& out) {
   lastError_ = "";
   if (WiFi.status() != WL_CONNECTED) {
@@ -180,62 +183,62 @@ bool WeatherClient::fetchCrypto(CryptoBoard& out) {
     return false;
   }
 
-  // CoinCodex wants an explicit date range, so the crypto page needs the SNTP
-  // clock (everything else works without it).
-  const uint32_t now = epochNow();
-  if (now == 0) {
-    lastError_ = "clock not set";
-    return false;
-  }
-  const time_t nowSeconds = static_cast<time_t>(now);
-  struct tm today;
-  localtime_r(&nowSeconds, &today);
-  struct tm weekAgo = today;
-  weekAgo.tm_mday -= 6;
-  mktime(&weekAgo);  // normalises the day underflow
-  char start[11];
-  char end[11];
-  strftime(start, sizeof(start), "%Y-%m-%d", &weekAgo);
-  strftime(end, sizeof(end), "%Y-%m-%d", &today);
-
   WiFiClientSecure secure;
   secure.setInsecure();
 
   HTTPClient http;
   http.setConnectTimeout(config_.httpTimeoutMs);
   http.setTimeout(config_.httpTimeoutMs);
-  http.setReuse(true);  // same host for all seven requests: keep the TLS session
   http.setUserAgent("x4-weather/1.0");
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
-  CryptoBoard board;
-  uint8_t fetched = 0;
+  // 1) One request for every quote (price + 24 h change, including XMR).
+  String quotesUrl = "https://api.coinlore.net/api/ticker/?id=";
   for (uint8_t i = 0; i < kCoinCount; ++i) {
-    String url = "https://coincodex.com/api/coincodex/get_coin_history/";
-    url += coinInfo(i).apiId;
-    url += '/';
-    url += start;
-    url += '/';
-    url += end;
-    url += "/4";
+    if (i > 0) quotesUrl += ',';
+    quotesUrl += coinInfo(i).apiId;
+  }
 
-    if (!http.begin(secure, url)) {
-      http.end();
-      lastError_ = "http.begin failed";
-      break;
-    }
-    const int status = http.GET();
-    if (status == HTTP_CODE_OK) {
+  CryptoBoard board;
+  uint8_t quotes = 0;
+  int quotesStatus = 0;
+  if (http.begin(secure, quotesUrl)) {
+    quotesStatus = http.GET();
+    if (quotesStatus == HTTP_CODE_OK) {
       const String payload = http.getString();
-      if (parseCoinSeries(payload.c_str(), payload.length(), board)) ++fetched;
+      if (parseCoinQuotes(payload.c_str(), payload.length(), board)) {
+        for (uint8_t i = 0; i < kCoinCount; ++i) {
+          if (board.coins[i].valid) ++quotes;
+        }
+      }
     }
     http.end();
   }
-
-  if (fetched * 2 < kCoinCount) {
-    lastError_ = "unexpected crypto response";
+  Serial.printf("[weather] crypto quotes HTTP %d: %u/%u coins\n", quotesStatus,
+                static_cast<unsigned>(quotes), static_cast<unsigned>(kCoinCount));
+  if (quotes * 2 < kCoinCount) {
+    lastError_ = "quote request failed";
     return false;
   }
+
+  // 2) One request per coin for the 7-day sparkline (best effort: a missing line
+  // is better than no page). XMR has no reachable source, see the coin table.
+  uint8_t lines = 0;
+  for (uint8_t i = 0; i < kCoinCount; ++i) {
+    const char* pair = coinInfo(i).pair;
+    if (pair == nullptr) continue;
+
+    String url = "https://api.gateio.ws/api/v4/spot/candlesticks?interval=4h&limit=42&currency_pair=";
+    url += pair;
+    if (!http.begin(secure, url)) continue;
+    if (http.GET() == HTTP_CODE_OK) {
+      const String payload = http.getString();
+      if (parseCoinCandles(coinInfo(i).symbol, payload.c_str(), payload.length(), board)) ++lines;
+    }
+    http.end();
+  }
+  Serial.printf("[weather] crypto sparklines: %u\n", static_cast<unsigned>(lines));
+
   board.ok = true;
   board.fetchedEpoch = epochNow();
   out = board;

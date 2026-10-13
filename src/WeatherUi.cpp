@@ -421,33 +421,41 @@ void drawCryptoPage(DisplayTarget& target, const ScreenState& state) {
     const CoinInfo& info = coinInfo(i);
     const CoinQuote& quote = report.crypto.coins[i];
     const int16_t rowTop = static_cast<int16_t>(kCoinRowsTop + row * kCoinRowHeight);
-    const int16_t symbolBaseline = static_cast<int16_t>(rowTop + 62);
+    const int16_t symbolBaseline = static_cast<int16_t>(rowTop + 58);
     if (row > 0) drawDashedRule(target, static_cast<int16_t>(rowTop - 10), kMargin, kWidth - kMargin);
 
     drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, kMargin, symbolBaseline, info.symbol,
              TextAlign::Left, 80, Color::Black);
-    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 108, symbolBaseline, info.nameZh, TextAlign::Left, 84,
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 106, symbolBaseline, info.nameZh, TextAlign::Left, 86,
              Color::Black);
 
-    const Rect sparkBox{194, static_cast<int16_t>(rowTop + 22), 104, 34};
+    const Rect sparkBox{196, static_cast<int16_t>(rowTop + 20), 98, 34};
     drawSparkline(target, quote, sparkBox);
+    if (quote.sparkCount < 2) {
+      // No reachable OHLC source for this coin: say so instead of an empty box.
+      drawLine(target, freeink::ui::kNotoSansFont, kFontBody, sparkBox.x + 4,
+               static_cast<int16_t>(sparkBox.y + 26), "无走势", TextAlign::Center, sparkBox.width - 8,
+               Color::Black);
+    }
 
     if (!quote.valid) {
-      drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 150,
-               static_cast<int16_t>(rowTop + 40), "--", TextAlign::Right, 150, Color::Black);
+      drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 300, static_cast<int16_t>(rowTop + 40),
+               "--", TextAlign::Right, 156, Color::Black);
       continue;
     }
 
     char price[24];
     formatUsd(quote.usd, price, sizeof(price));
-    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 150,
-             static_cast<int16_t>(rowTop + 36), price, TextAlign::Right, 150, Color::Black);
+    // Price on the first line, 24 h change under it: both get the full width to
+    // the right of the sparkline, so no value is ever clipped.
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 300, static_cast<int16_t>(rowTop + 32),
+             price, TextAlign::Right, 156, Color::Black);
 
     char change[16];
     formatPercent(quote.change24h, change, sizeof(change));
-    drawTrendMarker(target, 388, static_cast<int16_t>(rowTop + 60), quote.change24h);
-    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 62,
-             static_cast<int16_t>(rowTop + 68), change, TextAlign::Right, 62, Color::Black);
+    drawTrendMarker(target, 372, static_cast<int16_t>(rowTop + 58), quote.change24h);
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 382, static_cast<int16_t>(rowTop + 66),
+             change, TextAlign::Right, 74, Color::Black);
   }
 }
 

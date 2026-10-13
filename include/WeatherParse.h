@@ -23,18 +23,22 @@ bool parseForecast(const char* json, size_t length, WeatherReport& out);
 // `out` is left untouched.
 bool parseAirQuality(const char* json, size_t length, AirQuality& out);
 
-// Parses a CoinCodex /api/coincodex/get_coin_history response — an object keyed
-// by symbol whose values are [timestamp, price, volume, market cap] series:
+// Parses a CoinLore /api/ticker/?id=... response — an array of coin objects:
 //
-//   {"BTC":[[1791273600,86034.07,...],[...]], "ETH":[...], ...}
+//   [{"id":"90","symbol":"BTC","price_usd":"83619.93",
+//     "percent_change_24h":"-0.27", ...}, ...]
 //
-// The last point is the current price, the 24 h change comes from the point four
-// samples back (four samples a day) and the series becomes the sparkline. The
-// live firmware gets one such response per coin, so keys the table does not know
-// are ignored and `out` is not cleared: only the coins present are updated.
-bool parseCoinSeries(const char* json, size_t length, CryptoBoard& out);
+// Numbers arrive as strings. Keys the table does not know are ignored and `out`
+// is not cleared: only the coins present are updated.
+bool parseCoinQuotes(const char* json, size_t length, CryptoBoard& out);
 
-// Same, but for a whole board: starts from an empty board and requires at least
+// Parses a Gate.io /api/v4/spot/candlesticks response for `symbol`
+// ([[ts, quote volume, close, high, low, open, ...], ...], oldest first) into
+// that coin's 7-day sparkline, stored relative to the first close. The price and
+// 24 h change are left alone — those come from the quotes request.
+bool parseCoinCandles(const char* symbol, const char* json, size_t length, CryptoBoard& out);
+
+// Quotes for a whole board: starts from an empty board and requires at least
 // half the table to be present (otherwise the page would be misleading).
 bool parseCrypto(const char* json, size_t length, CryptoBoard& out);
 

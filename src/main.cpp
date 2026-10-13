@@ -576,7 +576,14 @@ void setup() {
     location = cachedLocation;
   }
   applyLocation();
-  if (pageIndex < weather::kPageCount) page = static_cast<weather::Page>(pageIndex);
+  const uint8_t defaultPage =
+      WEATHER_DEFAULT_PAGE < weather::kPageCount ? static_cast<uint8_t>(WEATHER_DEFAULT_PAGE) : 0;
+  if (!coldBoot && pageIndex < weather::kPageCount) {
+    page = static_cast<weather::Page>(pageIndex);  // resume the page the user left
+  } else {
+    page = static_cast<weather::Page>(defaultPage);
+  }
+  pageIndex = static_cast<uint8_t>(page);
   if (cryptoSortIndex >= weather::kCryptoSortCount) cryptoSortIndex = 0;
 
   input.begin();

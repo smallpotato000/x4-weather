@@ -106,11 +106,26 @@ bool loadAirQuality(const char* path, weather::AirQuality& air) {
   return weather::parseAirQuality(json.c_str(), json.size(), air);
 }
 
+// Quotes come from one file; each coin's 7-day sparkline comes from
+// tools/preview/candles_<SYMBOL>.json (the firmware fetches them one by one).
 bool loadCrypto(const char* path, weather::CryptoBoard& board) {
   if (path == nullptr) return false;
   const std::string json = readFile(path);
   if (json.empty()) return false;
-  return weather::parseCrypto(json.c_str(), json.size(), board);
+  if (!weather::parseCrypto(json.c_str(), json.size(), board)) return false;
+
+  const std::string quotesPath(path);
+  const std::string directory = quotesPath.substr(0, quotesPath.find_last_of('/') + 1);
+  for (uint8_t i = 0; i < weather::kCoinCount; ++i) {
+    const weather::CoinInfo& info = weather::coinInfo(i);
+    if (info.pair == nullptr) continue;
+    const std::string candlesPath = directory + "candles_" + info.symbol + ".json";
+    const std::string candles = readFile(candlesPath.c_str());
+    if (!candles.empty()) {
+      weather::parseCoinCandles(info.symbol, candles.c_str(), candles.size(), board);
+    }
+  }
+  return true;
 }
 
 int writePbm(const char* path) {

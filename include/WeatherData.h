@@ -68,7 +68,8 @@ struct AirQuality {
 struct CoinInfo {
   const char* symbol;  // "BTC"
   const char* nameZh;  // "比特币"
-  const char* apiId;   // provider id (CoinGecko), "bitcoin"
+  const char* apiId;   // CoinLore id, "90"
+  const char* pair;    // Gate.io pair for the 7-day sparkline, or nullptr
 };
 
 // Sparkline values are stored in 0.01% steps relative to `sparkRef` (the first
@@ -189,7 +190,10 @@ const CoinInfo& coinInfo(uint8_t index);
 // Short label for the crypto sort mode ("表序" / "涨幅榜" / "跌幅榜").
 const char* cryptoSortName(CryptoSort sort);
 
-// Index of the coin whose provider id matches, or -1.
+// Index of the coin whose CoinLore id matches, or -1.
 int coinIndexForApiId(const char* apiId);
+
+// Index of the coin whose ticker symbol matches ("BTC"), or -1.
+int coinIndexForSymbol(const char* symbol);
 
 }  // namespace weather

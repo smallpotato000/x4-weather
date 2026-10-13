@@ -70,18 +70,27 @@
 ![行情·涨幅榜](docs/preview-crypto-gainers.png)
 
 - 价格带千分位、小数位自适应；▲▼ 表示 24 小时方向；折线框里的虚线是 7 天前的开盘价（基准线）；
-- 数据来自 **CoinCodex** `get_coin_history`：**一个币一个请求**（7 个请求，每个约 2.7 KB），
-  一次拿到「7 天价格序列 + 最新价 + 24 小时变化」，7 个币（含 XMR）都能取到；
-  和空气质量一样**只在翻到该页时才请求**，7 个请求复用同一条 TLS 连接；
-- 序列在提交时转成「相对首点的 0.01%」存进 RTC（int16，41 点），画图与 min/max 都用它；
-- 想换币种或数据源：改 `src/WeatherData.cpp` 的 `kCoins` 表（符号/中文名/数据源 id）与
-  `WeatherClient::fetchCrypto()` 的 URL，解析器不用动。
+- **两个源分工**：价格与 24 小时涨跌来自 **CoinLore**（`/api/ticker/?id=...`，**一个请求拿全 7 个币**，
+  含 XMR）；7 天走势来自 **Gate.io** 现货 4 小时 K 线（`/api/v4/spot/candlesticks`，**一个币一个请求**，
+  42 根 ≈ 7 天）。和空气质量一样**只在翻到该页时才请求**；
+- XMR 没有走势：能裸连到的交易所里，Binance 已于 2024 年退市 XMR（K 线是陈旧的），Gate 没有这个币对，
+  所以它的行显示价格与涨跌 + 「无走势」——**宁可不画，也不画错**；
+- 想换币种或数据源：改 `src/WeatherData.cpp` 的 `kCoins` 表（符号 / 中文名 / CoinLore id / Gate 币对）
+  与 `WeatherClient::fetchCrypto()` 的 URL，解析器不用动。
 
-> **为什么不用 CoinGecko？** 它需要 28 KB 的 `coins/markets` 才带走势，而且更重要的是
-> **网络可达性**：开发这台机器走代理（`127.0.0.1:3067`，TUN 模式），而 ESP32-C3 没有代理——
-> 裸连测试里 CoinGecko / OKX / MEXC / HTX / Kraken / CoinCap 全部超时，
-> 只有 Binance Vision、Gate.io、CoinLore、CoinCodex 能通。所以要换源时，
-> **先在这台机器的终端用 `curl --noproxy '*'` 试一下**（不加 `--noproxy` 就是在测代理，不代表设备能通）。
+> **数据源是按"设备能不能直连"挑的，不是按名气。** 开发这台 Mac 走代理
+> （`127.0.0.1:3067`，TUN 模式），ESP32-C3 没有代理，所以**在 Mac 上 curl 通 ≠ 设备通**。
+> 固件里做过一次**从设备侧发起**的探针测试，结论：
+>
+> | 源 | 设备侧结果 |
+> |---|---|
+> | CoinLore | ✅ HTTP 200 |
+> | Gate.io | ✅ HTTP 200 |
+> | Binance Vision | ✅ HTTP 200（但 XMR 数据陈旧） |
+> | CoinCodex | ❌ HTTP 403（Cloudflare 拦，换 UA / 换请求头都没用） |
+> | CoinGecko / OKX / MEXC / HTX / Kraken / CoinCap | ❌ 连接失败 |
+>
+> 以后换源请这样验：`curl --noproxy '*' <URL>`（不加 `--noproxy` 测的是代理，不代表设备）。
 
 ## 3. 真机实测与功耗
 
@@ -132,7 +141,7 @@ cycle period ≈ 68.6 s = 60 s 深睡 + 8.6 s 活跃
 刷新间隔和电池容量。想更省就加大 `WEATHER_REFRESH_MINUTES`。
 
 交互会话是唯一"按需多花电"的地方：25 秒会话本身约 0.7 mAh（WiFi 保持连着，好让确认键/空气质量/行情即点即取；
-行情那 7 个请求大约多花 2–3 s），
+行情那 7 个请求（1 报价 + 6 K 线）大约多花 3–4 s），
 折合每天用 10 次也才 ~7 mAh。把 `WEATHER_INTERACTIVE_SECONDS` 调小或设 0 就能省掉。
 
 ### 调试深睡设备的两个坑（都踩过了）
@@ -280,17 +289,22 @@ https://air-quality-api.open-meteo.com/v1/air-quality
   &current=european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone&timezone=auto
 ```
 
-行情（按需，翻到该页才请求；每个币一个约 2.7 KB 的请求）：
+行情（按需，翻到该页才请求；两个源，共 7 个请求）：
 
 ```
-https://coincodex.com/api/coincodex/get_coin_history/{BTC|ETH|XRP|BNB|SOL|TRX|XMR}
-  /<今天-6天>/<今天>/4          # 最后一段 = 每天采样点数（4 → 7 天 41 点）
-  → {"BTC":[[1791273600,86034.07,28788186560.7,1728774806025.6], ...]}
-                 ↑时间戳    ↑价格
+# 7 个币的价格与 24 小时涨跌：CoinLore，一个请求（约 2.5 KB）
+https://api.coinlore.net/api/ticker/?id=90,80,58,2710,48543,2713,28
+  → [{"id":"90","symbol":"BTC","price_usd":"83619.93","percent_change_24h":"-0.27", ...}, ...]
+
+# 每个币的 7 天走势：Gate.io 现货 4 小时 K 线，42 根（约 4 KB）
+https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=BTC_USDT&interval=4h&limit=42
+  → [["1791273600","117997889.14","86242.3","86377.6","85555.8","85561.5", ...], ...]
+                 ↑时间戳        ↑成交额     ↑收盘（数组第 3 个）
 ```
 
-最后一点是最新价，往回第 5 个点就是 24 小时前（每天 4 个点），整条序列直接当 7 天走势用。
-日期范围由设备时钟（SNTP）算出——所以行情页比其它页多一个前提：**时钟已同步**。
+K 线的字段全是**字符串**，解析时按位置取第 3 个当收盘价，整条序列存成「相对首个收盘价的 0.01%」
+int16（42 点刚好放进 RTC 缓存），画图与极值都用它。价格与涨跌**只认 CoinLore**，
+K 线不覆盖它们——两个源的报价可能差一点点，混着用会闪。
 
 - `timezone=auto`：日预报的日期和 `current.time` 都是**当地时间**，固件只做格式化。
 - 时间来自 SNTP（`configTzTime`，时区字符串见 `WEATHER_TIMEZONE`，默认 `"CST-8"`），
@@ -334,7 +348,8 @@ x4-weather/
 │   ├── gen_icons.py            # 天气图标（Pillow 画矢量 → 4× 超采样 → 二值化）
 │   ├── charset_extra.txt       # 额外字符（城市名等）
 │   ├── fonts/README.md         # 字体来源与许可
-│   └── preview/                # 主机端渲染预览（render.sh / to_png.py / 测试 / 四份真实响应快照）
+│   └── preview/                # 主机端渲染预览（render.sh / to_png.py / 测试 / 真实响应快照：
+│                               #   天气、空气质量、geocoding、CoinLore 报价、6 份 Gate K 线）
 └── docs/                       # README 用的预览图
 ```
 
@@ -391,9 +406,10 @@ PREVIEW_PYTHON=/path/to/python sh tools/test_host.sh
 1. **解析测试**：`tools/preview/test_parse.cpp` 用真实的 Open-Meteo 响应
    （`tools/preview/sample_response.json`，固件请求的那条 URL 对武汉的真实返回快照）驱动
    `weather::parseForecast()`——固件里跑的就是同一份 `src/WeatherParse.cpp`。
-   覆盖：实况字段、三天下限/上限、逐小时 12 条、空气质量、行情（7 天序列 → 最新价/24 小时变化/
-   走势点数与极值、**单币响应只填该币不动其它币**）、geocoding、价格与涨跌格式化，
-   以及截断/缺 `current`/空载荷/只回一半币种/零价格序列等坏载荷被拒绝且**不污染上一次数据**。
+   覆盖：实况字段、三天下限/上限、逐小时 12 条、空气质量、行情（报价 → 价格/24 小时变化、
+   K 线 → 42 点走势与极值、**单币响应只填该币不动其它币**、未知币种被拒）、geocoding、
+   价格与涨跌格式化，以及截断/缺 `current`/空载荷/只回一半币种/零价格 K 线等坏载荷
+   被拒绝且**不污染上一次数据**。
 2. **渲染预览**：编译**和固件完全相同**的 `WeatherUi.cpp` + `CjkGlyphSource.cpp` +
    FreeInkUI 的 `DisplayTarget`，往模拟的 800×480 framebuffer 上画。`ok` 这一档会把
    录制下来的响应**过一遍同一个解析器**再渲染，所以预览图上的数字（28.4 °C / 少云 /
@@ -443,7 +459,8 @@ sh tools/preview/render.sh ok /tmp/other.json /tmp/air.json   # 换数据源渲�
 | 深睡后不自动醒 | 看串口有没有 `deep sleep N min` 日志；确认电量，以及 `WEATHER_REFRESH_MINUTES` 不为 0 |
 | 设备频繁自己醒来 | 多半是按键悬空/干扰，把 `WEATHER_WAKE_ON_BUTTON` 设为 `0` |
 | 唤醒后还是旧数据 | 底栏会写“获取失败 …，显示上次数据”；检查网络，5 分钟后自动重试 |
-| 行情页写“行情获取失败” | 三个常见原因：① 时钟没同步（CoinCodex 要日期范围，看日志里 `clock --:--`）；② 你的网络要代理才能访问境外行情站，而设备**没有代理**——用 `curl --noproxy '*' <URL>` 在电脑上验一下；③ 数据源挂了，换 `kCoins` 表与 `fetchCrypto()` 的 URL |
+| 行情页写“行情获取失败” | 看串口日志：`crypto quotes HTTP -1` = 连不上（换源，见上文的设备侧可达性表）、`403` = 被 Cloudflare 拦、`200` 但币数 0 = 响应格式变了。XMR 那行写“无走势”是正常的 |
+| 想让自己电脑当代理给设备用 | 现在的 ESP-IDF/Arduino TLS 栈**没有代理支持**（`esp-tls` 里没有 proxy 字段），要让设备走 HTTP CONNECT 代理得自己用 mbedTLS 手写隧道（约 150 行）；本项目的做法是**选裸连可达的数据源**，不需要代理 |
 | 编译报找不到 `../freeink-sdk` | 改 `platformio.ini` 里 5 个 `symlink://` 路径指向你的 SDK checkout |
 
 ## 15. 许可与致谢

@@ -17,7 +17,7 @@ constexpr uint16_t kSeriesPointMax = 64;
 
 struct ParseContext {
   enum class Section : uint8_t { None, Current, Hourly, Daily };
-  enum class Target : uint8_t { Weather, Air, Crypto, Geo };
+  enum class Target : uint8_t { Weather, Air, Quotes, Candles, Geo };
 
   Target target = Target::Weather;
   WeatherReport* out = nullptr;   // weather target
@@ -32,10 +32,15 @@ struct ParseContext {
   uint8_t dayCount = 0;  // daily.time entries seen
   bool sawCurrent = false;
 
-  // Crypto: {"BTC":[[ts, price, volume, market cap], ...], ...} — the key names
-  // the coin, the outer array is the series, each inner array is one sample.
-  int pendingCoin = -1;    // coin whose series is about to start
-  uint8_t seriesCoin = 0;  // coin being collected
+  // Quotes (CoinLore): an array of coin objects with string numbers.
+  char stagingSymbol[8] = {0};
+  float stagingUsd = 0.0f;
+  float stagingChange = 0.0f;
+  bool sawQuotePrice = false;
+  uint8_t quotesCommitted = 0;
+
+  // Candles (Gate.io): [[ts, quote volume, close, high, low, open, ...], ...].
+  uint8_t candleCoin = 0;  // resolved from the symbol before parsing starts
   bool inSeries = false;
   bool inCandle = false;
   uint8_t candleField = 0;
@@ -65,18 +70,20 @@ void copyText(const char* value, size_t len, char* destination, size_t capacity)
 // --- StreamingJsonParser callbacks -----------------------------------------
 
 void onKey(void* ctx, const char* key, size_t len) {
-  ParseContext& p = *static_cast<ParseContext*>(ctx);
-  copyKey(p.key, key, len);
-  if (p.target == ParseContext::Target::Crypto) {
-    p.pendingCoin = coinIndexForApiId(p.key);  // -1 for anything that is not a coin
-  }
+  copyKey(static_cast<ParseContext*>(ctx)->key, key, len);
 }
 
 void onObjectStart(void* ctx) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
 
-  if (p.target == ParseContext::Target::Crypto) {
-    p.section = ParseContext::Section::None;  // the series carries no objects
+  if (p.target == ParseContext::Target::Quotes) {
+    p.section = ParseContext::Section::Current;  // one coin object
+    p.stagingSymbol[0] = '\0';
+    p.sawQuotePrice = false;
+    return;
+  }
+  if (p.target == ParseContext::Target::Candles) {
+    p.section = ParseContext::Section::None;  // arrays only
     return;
   }
 
@@ -99,34 +106,22 @@ void onObjectStart(void* ctx) {
   }
 }
 
-// Turns the buffered series into a CoinQuote: the last point is the price, four
-// samples back is 24 h ago, and the whole series becomes the sparkline (stored
-// in 0.01% steps relative to its first point, so the RTC cache stays small and
-// scale-free).
-void commitSeries(ParseContext& p) {
-  if (p.seriesCount < 2 || p.crypto == nullptr) return;
+// Stores a price series as the coin's sparkline, in 0.01% steps relative to its
+// first point: scale-free, and small enough to live in the RTC cache. 42 points
+// for a 7-day window fits kSparklinePoints; longer series are downsampled.
+bool storeSparkline(CoinQuote& quote, const float* prices, uint16_t count) {
+  if (count < 2) return false;
+  const float reference = prices[0];
+  if (!(reference > 0.0f)) return false;  // a zero reference means broken data
 
-  const float reference = p.seriesPrice[0];
-  if (!(reference > 0.0f)) return;
-
-  CoinQuote& quote = p.crypto->coins[p.seriesCoin];
-  quote = CoinQuote{};
-  quote.usd = p.seriesPrice[p.seriesCount - 1];
-  quote.change24h =
-      p.seriesCount >= 5 ? (quote.usd / p.seriesPrice[p.seriesCount - 5] - 1.0f) * 100.0f : 0.0f;
   quote.sparkRef = reference;
-  quote.valid = true;
-
-  // 41 points for a 7-day window fits kSparklinePoints; longer responses are
-  // downsampled.
-  const bool fits = p.seriesCount <= kSparklinePoints;
-  const uint16_t stored = fits ? p.seriesCount : kSparklinePoints;
+  const bool fits = count <= kSparklinePoints;
+  const uint16_t stored = fits ? count : kSparklinePoints;
   int16_t low = 0;
   int16_t high = 0;
   for (uint16_t i = 0; i < stored; ++i) {
-    const uint32_t source =
-        fits ? i : static_cast<uint32_t>(i) * (p.seriesCount - 1) / (kSparklinePoints - 1);
-    float relative = (p.seriesPrice[source] / reference - 1.0f) * 10000.0f;
+    const uint32_t source = fits ? i : static_cast<uint32_t>(i) * (count - 1) / (kSparklinePoints - 1);
+    float relative = (prices[source] / reference - 1.0f) * 10000.0f;
     if (relative > 32000.0f) relative = 32000.0f;
     if (relative < -32000.0f) relative = -32000.0f;
     const int16_t value = static_cast<int16_t>(relative);
@@ -137,11 +132,31 @@ void commitSeries(ParseContext& p) {
   quote.sparkCount = static_cast<uint8_t>(stored);
   quote.sparkMin = low;
   quote.sparkMax = high;
-  ++p.seriesCommitted;
+  return true;
+}
+
+// Each CoinLore object is one coin: symbol + price + 24 h change (as strings).
+void commitQuote(ParseContext& p) {
+  if (p.crypto == nullptr || !p.sawQuotePrice) return;
+  const int index = coinIndexForSymbol(p.stagingSymbol);
+  if (index < 0) return;
+
+  CoinQuote& quote = p.crypto->coins[index];
+  quote.usd = p.stagingUsd;
+  quote.change24h = p.stagingChange;
+  quote.valid = true;
+  ++p.quotesCommitted;
 }
 
 void onObjectEnd(void* ctx) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
+
+  if (p.target == ParseContext::Target::Quotes) {
+    if (p.section == ParseContext::Section::Current) commitQuote(p);
+    p.section = ParseContext::Section::None;
+    return;
+  }
+  if (p.target == ParseContext::Target::Candles) return;
 
   if (p.target == ParseContext::Target::Geo && p.section == ParseContext::Section::Current) {
     p.geoResultTaken = true;  // ignore any further results
@@ -154,15 +169,15 @@ void onObjectEnd(void* ctx) {
 void onArrayStart(void* ctx) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
 
-  if (p.target == ParseContext::Target::Crypto) {
-    if (!p.inSeries && p.pendingCoin >= 0) {
+  if (p.target == ParseContext::Target::Quotes) return;  // its elements are objects
+
+  if (p.target == ParseContext::Target::Candles) {
+    if (!p.inSeries) {
       p.inSeries = true;
       p.inCandle = false;
-      p.seriesCoin = static_cast<uint8_t>(p.pendingCoin);
-      p.pendingCoin = -1;
       p.seriesCount = 0;
-    } else if (p.inSeries) {
-      p.inCandle = true;  // one [ts, price, volume, market cap] sample
+    } else {
+      p.inCandle = true;  // one [ts, quote volume, close, high, low, open, ...] candle
       p.candleField = 0;
     }
     return;
@@ -185,11 +200,14 @@ void onArrayStart(void* ctx) {
 void onArrayEnd(void* ctx) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
 
-  if (p.target == ParseContext::Target::Crypto) {
+  if (p.target == ParseContext::Target::Candles) {
     if (p.inCandle) {
       p.inCandle = false;
     } else if (p.inSeries) {
-      commitSeries(p);
+      if (p.crypto != nullptr &&
+          storeSparkline(p.crypto->coins[p.candleCoin], p.seriesPrice, p.seriesCount)) {
+        ++p.seriesCommitted;
+      }
       p.inSeries = false;
     }
     return;
@@ -250,12 +268,12 @@ void onNumber(void* ctx, const char* value, size_t) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
   const float number = std::strtof(value, nullptr);
 
-  if (p.target == ParseContext::Target::Crypto) {
+  if (p.target == ParseContext::Target::Candles) {
     if (!p.inCandle) return;
-    if (p.candleField == 1) {
-      if (p.seriesCount < kSeriesPointMax) p.seriesPrice[p.seriesCount++] = number;
+    if (p.candleField == 2 && p.seriesCount < kSeriesPointMax) {
+      p.seriesPrice[p.seriesCount++] = number;  // 2 = close
     }
-    ++p.candleField;  // 0 = timestamp, 1 = price, then volume / market cap
+    ++p.candleField;
     return;
   }
 
@@ -321,7 +339,28 @@ void onNumber(void* ctx, const char* value, size_t) {
 void onString(void* ctx, const char* value, size_t len) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
 
-  if (p.target == ParseContext::Target::Crypto) return;  // the series is all numbers
+  if (p.target == ParseContext::Target::Quotes) {
+    if (p.section != ParseContext::Section::Current) return;
+    if (keyIs(p.key, "symbol")) {
+      copyText(value, len, p.stagingSymbol, sizeof(p.stagingSymbol));
+    } else if (keyIs(p.key, "price_usd")) {
+      p.stagingUsd = std::strtof(value, nullptr);
+      p.sawQuotePrice = true;
+    } else if (keyIs(p.key, "percent_change_24h")) {
+      p.stagingChange = std::strtof(value, nullptr);
+    }
+    return;
+  }
+  if (p.target == ParseContext::Target::Candles) {
+    // Gate.io quotes every candle field, so the closes arrive as strings.
+    if (p.inCandle) {
+      if (p.candleField == 2 && p.seriesCount < kSeriesPointMax) {
+        p.seriesPrice[p.seriesCount++] = std::strtof(value, nullptr);
+      }
+      ++p.candleField;
+    }
+    return;
+  }
 
   if (p.target == ParseContext::Target::Air) {
     if (p.section == ParseContext::Section::Current && keyIs(p.key, "time")) {
@@ -423,12 +462,28 @@ bool parseAirQuality(const char* json, size_t length, AirQuality& out) {
   return true;
 }
 
-bool parseCoinSeries(const char* json, size_t length, CryptoBoard& out) {
+bool parseCoinQuotes(const char* json, size_t length, CryptoBoard& out) {
   if (json == nullptr || length == 0) return false;
 
   ParseContext ctx;
-  ctx.target = ParseContext::Target::Crypto;
+  ctx.target = ParseContext::Target::Quotes;
   ctx.crypto = &out;
+
+  StreamingJsonParser parser(makeCallbacks(ctx));
+  parser.feed(json, length);
+
+  return !parser.hasError() && ctx.quotesCommitted > 0;
+}
+
+bool parseCoinCandles(const char* symbol, const char* json, size_t length, CryptoBoard& out) {
+  if (json == nullptr || length == 0) return false;
+  const int index = coinIndexForSymbol(symbol);
+  if (index < 0) return false;
+
+  ParseContext ctx;
+  ctx.target = ParseContext::Target::Candles;
+  ctx.crypto = &out;
+  ctx.candleCoin = static_cast<uint8_t>(index);
 
   StreamingJsonParser parser(makeCallbacks(ctx));
   parser.feed(json, length);
@@ -438,7 +493,7 @@ bool parseCoinSeries(const char* json, size_t length, CryptoBoard& out) {
 
 bool parseCrypto(const char* json, size_t length, CryptoBoard& out) {
   CryptoBoard parsed;
-  if (!parseCoinSeries(json, length, parsed)) return false;
+  if (!parseCoinQuotes(json, length, parsed)) return false;
 
   uint8_t valid = 0;
   for (uint8_t i = 0; i < kCoinCount; ++i) {
