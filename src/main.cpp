@@ -59,8 +59,10 @@ RTC_DATA_ATTR uint32_t locationMagic = 0;
 RTC_DATA_ATTR weather::GeoLocation cachedLocation;
 
 // The page the user last looked at, so the next automatic refresh paints the
-// same one instead of snapping back to the current conditions.
+// same one instead of snapping back to the current conditions. The crypto page's
+// row order is remembered the same way.
 RTC_DATA_ATTR uint8_t pageIndex = 0;
+RTC_DATA_ATTR uint8_t cryptoSortIndex = 0;
 
 // The EInkDisplay constructor still takes pins for source compatibility, but
 // begin() reads the active board profile (Xteink X4: SCLK 8 / MOSI 10 / CS 21 /
@@ -116,6 +118,14 @@ void paint(EInkDisplay::RefreshMode mode) {
   state.page = page;
   state.busy = !firstAttemptDone;
   state.interactive = sessionActive;
+  state.cryptoSort = static_cast<weather::CryptoSort>(cryptoSortIndex);
+  char hintLine[40];
+  if (page == weather::Page::Crypto) {
+    // On the crypto page up/down re-order the rows instead of paging.
+    snprintf(hintLine, sizeof(hintLine), "上下排序 %s",
+             weather::cryptoSortName(static_cast<weather::CryptoSort>(cryptoSortIndex)));
+    state.hint = hintLine;
+  }
   weather::renderWeatherScreen(*target, state);
   display.displayBuffer(mode);
 }
@@ -463,11 +473,22 @@ void interactiveSession(int initialButton) {
       if (button == InputManager::BTN_BACK) break;  // sleep now
 
       bool repaint = false;
-      if (button == InputManager::BTN_LEFT || button == InputManager::BTN_UP) {
+      if (button == InputManager::BTN_LEFT) {
         page = weather::previousPage(page);
         repaint = true;
-      } else if (button == InputManager::BTN_RIGHT || button == InputManager::BTN_DOWN) {
+      } else if (button == InputManager::BTN_RIGHT) {
         page = weather::nextPage(page);
+        repaint = true;
+      } else if (button == InputManager::BTN_UP || button == InputManager::BTN_DOWN) {
+        if (page == weather::Page::Crypto) {
+          // Same keys that page elsewhere cycle the row order here.
+          const uint8_t step = button == InputManager::BTN_UP ? 1 : weather::kCryptoSortCount - 1;
+          cryptoSortIndex = static_cast<uint8_t>((cryptoSortIndex + step) % weather::kCryptoSortCount);
+          Serial.printf("[weather] crypto sort: %s\n",
+                        weather::cryptoSortName(static_cast<weather::CryptoSort>(cryptoSortIndex)));
+        } else {
+          page = button == InputManager::BTN_UP ? weather::previousPage(page) : weather::nextPage(page);
+        }
         repaint = true;
       } else if (button == InputManager::BTN_CONFIRM) {
         Serial.println("[weather] confirm: re-fetching");
@@ -556,6 +577,7 @@ void setup() {
   }
   applyLocation();
   if (pageIndex < weather::kPageCount) page = static_cast<weather::Page>(pageIndex);
+  if (cryptoSortIndex >= weather::kCryptoSortCount) cryptoSortIndex = 0;
 
   input.begin();
 

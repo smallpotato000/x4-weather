@@ -146,13 +146,21 @@ int main(int argc, char** argv) {
 
   const bool hourlyPage = std::strcmp(variant, "hourly") == 0;
   const bool airPage = std::strcmp(variant, "aqi") == 0;
-  const bool cryptoPage = std::strcmp(variant, "crypto") == 0;
+  const bool cryptoGainers = std::strcmp(variant, "crypto-gainers") == 0;
+  const bool cryptoLosers = std::strcmp(variant, "crypto-losers") == 0;
+  const bool cryptoPage = std::strcmp(variant, "crypto") == 0 || cryptoGainers || cryptoLosers;
   state.page = hourlyPage ? weather::Page::Hourly
                           : (airPage ? weather::Page::AirQuality
                                      : (cryptoPage ? weather::Page::Crypto : weather::Page::Now));
   // The extra pages are only reachable during a button session, so they are
   // previewed with the paging hint visible.
   state.interactive = hourlyPage || airPage || cryptoPage;
+  if (cryptoPage) {
+    state.cryptoSort = cryptoGainers ? weather::CryptoSort::Gainers
+                                     : (cryptoLosers ? weather::CryptoSort::Losers : weather::CryptoSort::Table);
+    state.hint = cryptoGainers ? "上下排序 涨幅榜"
+                               : (cryptoLosers ? "上下排序 跌幅榜" : "上下排序 表序");
+  }
 
   if (std::strcmp(variant, "busy") == 0) {
     state.busy = true;

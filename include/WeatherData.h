@@ -20,6 +20,10 @@ static constexpr uint8_t kForecastHours = 12;
 // How many coins the crypto page lists.
 static constexpr uint8_t kCoinCount = 7;
 
+// Sparkline resolution kept per coin (the API sends 168 hourly points; they are
+// downsampled on commit so the RTC cache stays small).
+static constexpr uint8_t kSparklinePoints = 48;
+
 struct CurrentWeather {
   bool valid = false;
   char time[20] = {0};  // local ISO-8601, "2026-10-12T16:30"
@@ -67,11 +71,27 @@ struct CoinInfo {
   const char* apiId;   // provider id (CoinGecko), "bitcoin"
 };
 
+// Sparkline values are stored in 0.01% steps relative to `sparkRef` (the first
+// point of the week), which keeps ±327% in an int16 and makes the shape
+// independent of the price scale.
 struct CoinQuote {
   bool valid = false;
   float usd = 0.0f;
   float change24h = 0.0f;  // percent, negative when down
+  uint8_t sparkCount = 0;  // 0 = no trend for this coin
+  int16_t spark[kSparklinePoints] = {0};
+  int16_t sparkMin = 0;
+  int16_t sparkMax = 0;
+  float sparkRef = 0.0f;   // the price the percentages refer to
 };
+
+// Order of the crypto rows.
+enum class CryptoSort : uint8_t {
+  Table = 0,      // table order (BTC, ETH, ...)
+  Gainers = 1,    // biggest 24 h gain first
+  Losers = 2,     // biggest 24 h drop first
+};
+static constexpr uint8_t kCryptoSortCount = 3;
 
 struct CryptoBoard {
   bool ok = false;
@@ -165,6 +185,9 @@ const char* formatPercent(float percent, char* out, size_t outLen);
 
 // Coin table entry (index order is the crypto page's display order).
 const CoinInfo& coinInfo(uint8_t index);
+
+// Short label for the crypto sort mode ("表序" / "涨幅榜" / "跌幅榜").
+const char* cryptoSortName(CryptoSort sort);
 
 // Index of the coin whose provider id matches, or -1.
 int coinIndexForApiId(const char* apiId);

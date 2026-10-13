@@ -180,18 +180,59 @@ bool WeatherClient::fetchCrypto(CryptoBoard& out) {
     return false;
   }
 
-  String url = "https://api.coingecko.com/api/v3/simple/price?ids=";
+  // markets (not simple/price) because it carries the 7-day sparkline in the
+  // same response; it is ~28 KB, so it is streamed rather than buffered.
+  String url = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&sparkline=true"
+               "&price_change_percentage=24h&ids=";
   for (uint8_t i = 0; i < kCoinCount; ++i) {
     if (i > 0) url += ',';
     url += coinInfo(i).apiId;
   }
-  url += "&vs_currencies=usd&include_24hr_change=true";
 
-  String payload;
-  if (!httpGet(url, payload)) return false;
+  WiFiClientSecure secure;
+  secure.setInsecure();
+
+  HTTPClient http;
+  http.setConnectTimeout(config_.httpTimeoutMs);
+  http.setTimeout(config_.httpTimeoutMs);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  if (!http.begin(secure, url)) {
+    lastError_ = "http.begin failed";
+    return false;
+  }
+  const int status = http.GET();
+  if (status != HTTP_CODE_OK) {
+    lastError_ = status > 0 ? "HTTP error" : "HTTP connection failed";
+    http.end();
+    return false;
+  }
 
   CryptoBoard parsed;
-  if (!parseCrypto(payload.c_str(), payload.length(), parsed)) {
+  CryptoStreamParser sink(parsed);
+  WiFiClient* stream = http.getStreamPtr();
+  const int total = http.getSize();
+  uint8_t buffer[512];
+  size_t received = 0;
+  uint32_t lastDataMs = millis();
+  while (true) {
+    if (total > 0 && received >= static_cast<size_t>(total)) break;
+    const size_t available = stream->available();
+    if (available == 0) {
+      if (!http.connected() && (total <= 0 || received >= static_cast<size_t>(total))) break;
+      if (millis() - lastDataMs > 5000) break;  // stalled
+      delay(5);
+      continue;
+    }
+    const size_t chunk = available < sizeof(buffer) ? available : sizeof(buffer);
+    const int read = stream->readBytes(buffer, chunk);
+    if (read <= 0) break;
+    sink.feed(reinterpret_cast<const char*>(buffer), static_cast<size_t>(read));
+    received += static_cast<size_t>(read);
+    lastDataMs = millis();
+  }
+  http.end();
+
+  if (!sink.finish()) {
     lastError_ = "unexpected crypto response";
     return false;
   }

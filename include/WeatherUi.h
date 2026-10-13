@@ -40,6 +40,8 @@ struct ScreenState {
   const char* place = nullptr;   // header label when the report has no place yet
   const char* status = nullptr;  // footer line (UTF-8), may be nullptr
   Page page = Page::Now;
+  CryptoSort cryptoSort = CryptoSort::Table;  // row order on the crypto page
+  const char* hint = nullptr;    // footer hint; defaults to the paging hint
   bool busy = false;             // first fetch in flight -> placeholder screen
   bool interactive = false;      // buttons are live -> show the paging hint
 };

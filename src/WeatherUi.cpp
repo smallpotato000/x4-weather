@@ -171,10 +171,10 @@ void drawFooter(DisplayTarget& target, const ScreenState& state) {
     drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kMargin, kFooterBaseline, state.status,
              TextAlign::Left, 240, Color::Black);
   }
-  char indicator[32];
+  char indicator[48];
   if (state.interactive) {
-    snprintf(indicator, sizeof(indicator), "%u/%u 左右切页", static_cast<unsigned>(state.page) + 1,
-             static_cast<unsigned>(kPageCount));
+    snprintf(indicator, sizeof(indicator), "%u/%u %s", static_cast<unsigned>(state.page) + 1,
+             static_cast<unsigned>(kPageCount), state.hint != nullptr ? state.hint : "左右切页");
   } else {
     snprintf(indicator, sizeof(indicator), "%u/%u", static_cast<unsigned>(state.page) + 1,
              static_cast<unsigned>(kPageCount));
@@ -378,7 +378,10 @@ void drawAirQualityPage(DisplayTarget& target, const WeatherReport& report) {
   drawPollutantRow(target, kPollutantRowsTop + 3 * kPollutantRowHeight, "二氧化氮", air.no2);
 }
 
-void drawCryptoPage(DisplayTarget& target, const WeatherReport& report) {
+void drawSparkline(DisplayTarget& target, const CoinQuote& quote, const Rect& box);
+
+void drawCryptoPage(DisplayTarget& target, const ScreenState& state) {
+  const WeatherReport& report = *state.report;
   drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, kMargin, 150, pageName(Page::Crypto),
            TextAlign::Left, 300, Color::Black);
   drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 150, 150, "兑美元 USD",
@@ -390,34 +393,100 @@ void drawCryptoPage(DisplayTarget& target, const WeatherReport& report) {
     return;
   }
 
-  for (uint8_t i = 0; i < kCoinCount; ++i) {
+  // Row order: table, gainers first or losers first. Coins without a quote keep
+  // their table position at the end.
+  uint8_t order[kCoinCount];
+  for (uint8_t i = 0; i < kCoinCount; ++i) order[i] = i;
+  if (state.cryptoSort != CryptoSort::Table) {
+    const bool descending = state.cryptoSort == CryptoSort::Gainers;
+    for (uint8_t i = 1; i < kCoinCount; ++i) {
+      const uint8_t current = order[i];
+      const CoinQuote& quote = report.crypto.coins[current];
+      int8_t j = static_cast<int8_t>(i - 1);
+      while (j >= 0) {
+        const CoinQuote& other = report.crypto.coins[order[j]];
+        float a = quote.valid ? quote.change24h : (descending ? -10000.0f : 10000.0f);
+        float b = other.valid ? other.change24h : (descending ? -10000.0f : 10000.0f);
+        const bool outOfOrder = descending ? (a > b) : (a < b);
+        if (!outOfOrder) break;
+        order[j + 1] = order[j];
+        --j;
+      }
+      order[j + 1] = current;
+    }
+  }
+
+  for (uint8_t row = 0; row < kCoinCount; ++row) {
+    const uint8_t i = order[row];
     const CoinInfo& info = coinInfo(i);
     const CoinQuote& quote = report.crypto.coins[i];
-    const int16_t rowTop = static_cast<int16_t>(kCoinRowsTop + i * kCoinRowHeight);
-    const int16_t baseline = static_cast<int16_t>(rowTop + 56);
-    if (i > 0) drawDashedRule(target, static_cast<int16_t>(rowTop - 10), kMargin, kWidth - kMargin);
+    const int16_t rowTop = static_cast<int16_t>(kCoinRowsTop + row * kCoinRowHeight);
+    const int16_t symbolBaseline = static_cast<int16_t>(rowTop + 62);
+    if (row > 0) drawDashedRule(target, static_cast<int16_t>(rowTop - 10), kMargin, kWidth - kMargin);
 
-    drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, kMargin, baseline, info.symbol, TextAlign::Left,
-             80, Color::Black);
-    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 110, baseline, info.nameZh, TextAlign::Left, 96,
+    drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, kMargin, symbolBaseline, info.symbol,
+             TextAlign::Left, 80, Color::Black);
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 108, symbolBaseline, info.nameZh, TextAlign::Left, 84,
              Color::Black);
 
+    const Rect sparkBox{194, static_cast<int16_t>(rowTop + 22), 104, 34};
+    drawSparkline(target, quote, sparkBox);
+
     if (!quote.valid) {
-      drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 150, baseline, "--",
-               TextAlign::Right, 150, Color::Black);
+      drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 150,
+               static_cast<int16_t>(rowTop + 40), "--", TextAlign::Right, 150, Color::Black);
       continue;
     }
 
     char price[24];
     formatUsd(quote.usd, price, sizeof(price));
-    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 190, baseline, price, TextAlign::Right, 150,
-             Color::Black);
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 150,
+             static_cast<int16_t>(rowTop + 36), price, TextAlign::Right, 150, Color::Black);
 
     char change[16];
     formatPercent(quote.change24h, change, sizeof(change));
-    drawTrendMarker(target, 372, static_cast<int16_t>(baseline - 8), quote.change24h);
-    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 74, baseline, change,
-             TextAlign::Right, 74, Color::Black);
+    drawTrendMarker(target, 388, static_cast<int16_t>(rowTop + 60), quote.change24h);
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 62,
+             static_cast<int16_t>(rowTop + 68), change, TextAlign::Right, 62, Color::Black);
+  }
+}
+
+// Seven-day trend: a 48-point polyline in a small box, with a dashed line at
+// the week's opening price so "up" and "down" read at a glance.
+void drawSparkline(DisplayTarget& target, const CoinQuote& quote, const Rect& box) {
+  const Paint ink = Paint::solid(Color::Black);
+  target.stroke(box, ink, 1);
+  if (quote.sparkCount < 2) return;
+
+  int16_t low = quote.spark[0];
+  int16_t high = quote.spark[0];
+  for (uint8_t i = 1; i < quote.sparkCount; ++i) {
+    if (quote.spark[i] < low) low = quote.spark[i];
+    if (quote.spark[i] > high) high = quote.spark[i];
+  }
+  if (high == low) high = static_cast<int16_t>(low + 1);
+
+  const int16_t innerTop = static_cast<int16_t>(box.y + 2);
+  const int16_t innerHeight = static_cast<int16_t>(box.height - 4);
+  const auto yFor = [&](int16_t value) {
+    const int32_t scaled = static_cast<int32_t>(value - low) * innerHeight / (high - low);
+    return static_cast<int16_t>(innerTop + innerHeight - scaled);
+  };
+  const auto xFor = [&](uint8_t index) {
+    return static_cast<int16_t>(box.x + 2 + static_cast<int32_t>(index) * (box.width - 5) /
+                                                 (quote.sparkCount - 1));
+  };
+
+  if (low <= 0 && high >= 0) {  // the opening price is inside the range
+    const int16_t y = yFor(0);
+    for (int16_t x = static_cast<int16_t>(box.x + 2); x < box.x + box.width - 3; x += 6) {
+      target.line(freeink::ui::Point{x, y}, freeink::ui::Point{static_cast<int16_t>(x + 2), y}, 1,
+                  Paint::solid(Color::DarkGray));
+    }
+  }
+  for (uint8_t i = 1; i < quote.sparkCount; ++i) {
+    target.line(freeink::ui::Point{xFor(static_cast<uint8_t>(i - 1)), yFor(quote.spark[i - 1])},
+                freeink::ui::Point{xFor(i), yFor(quote.spark[i])}, 2, ink);
   }
 }
 
@@ -470,7 +539,7 @@ void renderWeatherScreen(DisplayTarget& target, const ScreenState& state) {
       drawAirQualityPage(target, *report);
       break;
     case Page::Crypto:
-      drawCryptoPage(target, *report);
+      drawCryptoPage(target, state);
       break;
     case Page::Now:
     default:

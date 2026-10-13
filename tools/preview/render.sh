@@ -2,7 +2,8 @@
 # Render the weather screen on the host — no device, no PlatformIO.
 #
 #   tools/preview/render.sh [variant] [response.json] [air.json]
-#     variant: ok (default) | hourly | aqi | crypto | busy | error
+#     variant: ok (default) | hourly | aqi | crypto | crypto-gainers |
+#              crypto-losers | busy | error
 #     response.json / air.json: recorded Open-Meteo responses to render
 #     (default to the recorded Wuhan ones in tools/preview/)
 #

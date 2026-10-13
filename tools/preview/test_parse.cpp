@@ -137,19 +137,27 @@ void testRecordedCrypto(const std::string& json) {
 
   check(board.ok, "marked ok");
   check(board.coins[0].valid && board.coins[6].valid, "first and last coin valid");
-  checkFloat(board.coins[0].usd, 83393.0f, "BTC price");
-  checkFloat(board.coins[0].change24h, -0.3218f, "BTC 24 h change");
-  checkFloat(board.coins[1].usd, 2514.03f, "ETH price");
-  checkFloat(board.coins[3].usd, 744.46f, "BNB price");
-  checkFloat(board.coins[5].usd, 0.329837f, "TRX price");
-  checkFloat(board.coins[6].usd, 530.52f, "XMR price");
-  checkString(weather::coinInfo(0).symbol, "BTC", "coin 0 symbol");
-  checkString(weather::coinInfo(6).nameZh, "门罗币", "coin 6 name");
-  check(weather::coinIndexForApiId("monero") == 6, "api id -> table index");
-  check(weather::coinIndexForApiId("dogecoin") == -1, "unknown api id -> -1");
+  checkFloat(board.coins[0].usd, 83342.0f, "BTC price");
+  checkFloat(board.coins[0].change24h, -0.76f, "BTC 24 h change");
+  checkFloat(board.coins[1].usd, 2513.24f, "ETH price");
+  checkFloat(board.coins[3].usd, 744.26f, "BNB price");
+  checkFloat(board.coins[5].usd, 0.329749f, "TRX price");
+  checkFloat(board.coins[6].usd, 531.46f, "XMR price");
+
+  // The 168-point week is downsampled and stored relative to the first point.
+  check(board.coins[0].sparkCount == weather::kSparklinePoints, "BTC sparkline downsampled to 48 points");
+  checkFloat(board.coins[0].sparkRef, 85500.26f, "BTC sparkline reference");
+  check(board.coins[0].spark[0] == 0, "first sparkline point is the reference");
+  checkFloat(board.coins[0].sparkMin / 100.0f, -5.67f, "BTC week low (percent)");
+  checkFloat(board.coins[0].sparkMax / 100.0f, 1.28f, "BTC week high (percent)");
+  check(board.coins[6].sparkCount == weather::kSparklinePoints, "XMR sparkline present");
+  checkString(weather::cryptoSortName(weather::CryptoSort::Table), "表序", "sort name: table");
+  checkString(weather::cryptoSortName(weather::CryptoSort::Gainers), "涨幅榜", "sort name: gainers");
+  checkString(weather::cryptoSortName(weather::CryptoSort::Losers), "跌幅榜", "sort name: losers");
 
   char buffer[32];
   checkString(weather::formatUsd(83393.0f, buffer, sizeof(buffer)), "$83,393", "usd above 10k");
+  checkString(weather::formatUsd(83342.0f, buffer, sizeof(buffer)), "$83,342", "usd from the fixture");
   checkString(weather::formatUsd(2514.03f, buffer, sizeof(buffer)), "$2,514.03", "usd below 10k");
   checkString(weather::formatUsd(1.37f, buffer, sizeof(buffer)), "$1.37", "usd below 10");
   checkString(weather::formatUsd(0.329837f, buffer, sizeof(buffer)), "$0.3298", "usd below 1");
@@ -172,6 +180,30 @@ void testRecordedGeocode(const std::string& json) {
   checkString(geo.timezone, "Asia/Shanghai", "timezone");
   checkFloat(geo.latitude, 30.58333f, "latitude");
   checkFloat(geo.longitude, 114.26667f, "longitude");
+}
+
+// The firmware feeds the ~28 KB markets payload to the SAX parser in 512-byte
+// socket chunks, so the streaming path must agree with the one-shot parse.
+void testCryptoStreaming(const std::string& json) {
+  std::printf("crypto streaming (%zu bytes in 512-byte chunks)\n", json.size());
+  weather::CryptoBoard streamed;
+  {
+    weather::CryptoStreamParser sink(streamed);
+    const size_t chunk = 512;
+    for (size_t offset = 0; offset < json.size(); offset += chunk) {
+      const size_t remaining = json.size() - offset;
+      const size_t length = remaining < chunk ? remaining : chunk;
+      sink.feed(json.data() + offset, length);
+    }
+    check(sink.finish(), "chunked feed finishes cleanly");
+  }
+  check(streamed.ok == false, "board is only marked ok by parseCrypto()");  // sink fills coins only
+  check(streamed.coins[0].valid && streamed.coins[6].valid, "chunked: first and last coin valid");
+  checkFloat(streamed.coins[0].usd, 83342.0f, "chunked: BTC price");
+  checkFloat(streamed.coins[0].change24h, -0.76f, "chunked: BTC 24 h change");
+  check(streamed.coins[0].sparkCount == weather::kSparklinePoints, "chunked: sparkline points");
+  check(streamed.coins[0].spark[0] == 0, "chunked: first point is the reference");
+  check(streamed.coins[6].sparkCount == weather::kSparklinePoints, "chunked: last coin sparkline");
 }
 
 void testLongArraysAreCapped() {
@@ -222,9 +254,9 @@ void testRejectsBrokenPayloads() {
   weather::GeoLocation geo;
   // One coin out of seven is below the "half the table" floor: reject it rather
   // than render a page that looks like the market vanished.
-  const char* partialCrypto = "{\"bitcoin\":{\"usd\":83393,\"usd_24h_change\":-0.3}}";
+  const char* partialCrypto = "[{\"id\":\"bitcoin\",\"current_price\":83393,\"sparkline_in_7d\":{\"price\":[1,2]}}]";
   check(!weather::parseCrypto(partialCrypto, std::strlen(partialCrypto), board), "partial crypto rejected");
-  const char* brokenCrypto = "{\"bitcoin\":{\"usd\":83";
+  const char* brokenCrypto = "[{\"id\":\"bitcoin\",\"current_price\":83";
   check(!weather::parseCrypto(brokenCrypto, std::strlen(brokenCrypto), board), "truncated crypto rejected");
   const char* emptyResults = "{\"results\":[]}";
   check(!weather::parseGeocode(emptyResults, std::strlen(emptyResults), geo), "empty geocoding results rejected");
@@ -271,6 +303,7 @@ int main(int argc, char** argv) {
   testRecordedForecast(forecast);
   testRecordedAirQuality(air);
   testRecordedCrypto(crypto);
+  testCryptoStreaming(crypto);
   testRecordedGeocode(geocode);
   testLongArraysAreCapped();
   testRejectsBrokenPayloads();

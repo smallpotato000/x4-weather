@@ -10,6 +10,10 @@ namespace {
 
 constexpr uint8_t kMaxKeyLength = 31;
 
+// The API sends 168 hourly points per coin; buffer them (int16 relative steps)
+// and downsample on commit.
+constexpr uint16_t kSparklineRawMax = 200;
+
 struct ParseContext {
   enum class Section : uint8_t { None, Current, Hourly, Daily };
   enum class Target : uint8_t { Weather, Air, Crypto, Geo };
@@ -19,9 +23,18 @@ struct ParseContext {
   AirQuality* air = nullptr;      // air target
   CryptoBoard* crypto = nullptr;  // crypto target
   GeoLocation* geo = nullptr;     // geocoding target
-  int pendingCoin = -1;           // coin whose object is about to start
-  uint8_t coinIndex = 0;          // coin currently being filled
   uint8_t coinValid = 0;          // coins with a price in this response
+  // Crypto: the markets response is an array of coin objects, each with a
+  // nested sparkline object, so the coin is identified by its "id" field and
+  // committed when its object closes (field order independent).
+  uint8_t cryptoDepth = 0;
+  bool inSparkline = false;
+  CoinQuote staging;              // usd / change24h of the coin being read
+  char coinId[24] = {0};
+  bool sawPrice = false;
+  int16_t rawSpark[kSparklineRawMax] = {0};
+  uint16_t rawCount = 0;
+  float rawFirst = 0.0f;
   bool geoResultTaken = false;    // first geocoding result already consumed
   bool geoHasCoords = false;
   Section section = Section::None;
@@ -44,24 +57,25 @@ void copyKey(char* destination, const char* source, size_t length) {
 // --- StreamingJsonParser callbacks -----------------------------------------
 
 void onKey(void* ctx, const char* key, size_t len) {
-  ParseContext& p = *static_cast<ParseContext*>(ctx);
-  copyKey(p.key, key, len);
-  if (p.target == ParseContext::Target::Crypto) {
-    p.pendingCoin = coinIndexForApiId(p.key);  // -1 for "usd"/"usd_24h_change"/root keys
-  }
+  copyKey(static_cast<ParseContext*>(ctx)->key, key, len);
 }
 
 void onObjectStart(void* ctx) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
 
   if (p.target == ParseContext::Target::Crypto) {
-    if (p.pendingCoin >= 0) {
-      p.coinIndex = static_cast<uint8_t>(p.pendingCoin);
-      p.pendingCoin = -1;
-      p.section = ParseContext::Section::Current;  // re-used as "inside a coin object"
-    } else {
-      p.section = ParseContext::Section::None;
+    ++p.cryptoDepth;
+    if (p.cryptoDepth == 1) {
+      p.staging = CoinQuote{};
+      p.coinId[0] = '\0';
+      p.sawPrice = false;
+      p.inSparkline = false;
+      p.rawCount = 0;
+      p.rawFirst = 0.0f;
+    } else if (p.cryptoDepth == 2 && keyIs(p.key, "sparkline_in_7d")) {
+      p.inSparkline = true;
     }
+    p.section = ParseContext::Section::None;
     return;
   }
 
@@ -85,8 +99,49 @@ void onObjectStart(void* ctx) {
   }
 }
 
+// Downsample the buffered week and store the coin under its table index.
+void commitCoin(ParseContext& p) {
+  const int index = coinIndexForApiId(p.coinId);
+  if (index < 0 || !p.sawPrice) return;
+
+  CoinQuote quote;
+  quote.usd = p.staging.usd;
+  quote.change24h = p.staging.change24h;
+  quote.valid = true;
+  if (p.rawCount >= 2 && p.rawFirst > 0.0f) {
+    int16_t low = p.rawSpark[0];
+    int16_t high = p.rawSpark[0];
+    for (uint16_t i = 1; i < p.rawCount; ++i) {
+      if (p.rawSpark[i] < low) low = p.rawSpark[i];
+      if (p.rawSpark[i] > high) high = p.rawSpark[i];
+    }
+    quote.sparkCount = kSparklinePoints;
+    quote.sparkRef = p.rawFirst;
+    quote.sparkMin = low;
+    quote.sparkMax = high;
+    for (uint8_t i = 0; i < kSparklinePoints; ++i) {
+      const uint32_t source = static_cast<uint32_t>(i) * (p.rawCount - 1) / (kSparklinePoints - 1);
+      quote.spark[i] = p.rawSpark[source];
+    }
+  }
+  p.crypto->coins[index] = quote;
+  ++p.coinValid;
+}
+
 void onObjectEnd(void* ctx) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
+
+  if (p.target == ParseContext::Target::Crypto) {
+    if (p.cryptoDepth == 0) return;
+    --p.cryptoDepth;
+    if (p.cryptoDepth == 0) {
+      commitCoin(p);  // the coin object closed
+    } else if (p.cryptoDepth == 1) {
+      p.inSparkline = false;  // leaving sparkline_in_7d
+    }
+    return;
+  }
+
   if (p.target == ParseContext::Target::Geo && p.section == ParseContext::Section::Current) {
     p.geoResultTaken = true;  // ignore any further results
   }
@@ -102,6 +157,14 @@ void onArrayStart(void* ctx) {
     // `results` is the geocoding array; its first object is the city we want.
     p.inArray = keyIs(p.key, "results");
     p.index = 0;
+    return;
+  }
+  if (p.target == ParseContext::Target::Crypto) {
+    if (p.cryptoDepth == 2 && keyIs(p.key, "price")) {
+      p.inSparkline = true;
+      p.rawCount = 0;
+      p.rawFirst = 0.0f;
+    }
     return;
   }
   if (p.target != ParseContext::Target::Weather) return;
@@ -158,16 +221,26 @@ void onNumber(void* ctx, const char* value, size_t) {
   const float number = std::strtof(value, nullptr);
 
   if (p.target == ParseContext::Target::Crypto) {
-    if (p.section != ParseContext::Section::Current) return;
-    CoinQuote& coin = p.crypto->coins[p.coinIndex];
-    if (keyIs(p.key, "usd")) {
-      coin.usd = number;
-      if (!coin.valid) {
-        coin.valid = true;
-        ++p.coinValid;
+    if (p.inSparkline) {
+      if (p.rawCount >= kSparklineRawMax) return;
+      if (p.rawCount == 0) {
+        p.rawFirst = number;
+        p.rawSpark[p.rawCount++] = 0;  // first point is the reference
+      } else if (p.rawFirst > 0.0f) {
+        float relative = (number / p.rawFirst - 1.0f) * 10000.0f;
+        if (relative > 32000.0f) relative = 32000.0f;
+        if (relative < -32000.0f) relative = -32000.0f;
+        p.rawSpark[p.rawCount++] = static_cast<int16_t>(relative);
       }
-    } else if (keyIs(p.key, "usd_24h_change")) {
-      coin.change24h = number;
+      return;
+    }
+    if (p.cryptoDepth == 1) {
+      if (keyIs(p.key, "current_price")) {
+        p.staging.usd = number;
+        p.sawPrice = true;
+      } else if (keyIs(p.key, "price_change_percentage_24h")) {
+        p.staging.change24h = number;
+      }
     }
     return;
   }
@@ -243,6 +316,13 @@ void onString(void* ctx, const char* value, size_t len) {
   if (p.target == ParseContext::Target::Air) {
     if (p.section == ParseContext::Section::Current && keyIs(p.key, "time")) {
       copyTimestamp(value, len, p.air->time, sizeof(p.air->time));
+    }
+    return;
+  }
+
+  if (p.target == ParseContext::Target::Crypto) {
+    if (p.cryptoDepth == 1 && keyIs(p.key, "id")) {
+      copyTimestamp(value, len, p.coinId, sizeof(p.coinId));
     }
     return;
   }
@@ -333,20 +413,38 @@ bool parseForecast(const char* json, size_t length, WeatherReport& out) {
   return true;
 }
 
+struct CryptoStreamParser::Impl {
+  ParseContext ctx;
+  StreamingJsonParser parser;
+
+  explicit Impl(CryptoBoard& board) : parser(makeCallbacks(ctx)) {
+    ctx.target = ParseContext::Target::Crypto;
+    ctx.crypto = &board;
+  }
+};
+
+CryptoStreamParser::CryptoStreamParser(CryptoBoard& board) : impl_(new Impl(board)) {}
+
+CryptoStreamParser::~CryptoStreamParser() { delete impl_; }
+
+void CryptoStreamParser::feed(const char* data, size_t length) {
+  if (data == nullptr || length == 0) return;
+  impl_->parser.feed(data, length);
+}
+
+bool CryptoStreamParser::finish() const {
+  // A couple of missing ids is survivable (the row renders as "--"); half of
+  // them means the response shape changed and the page would be misleading.
+  return !impl_->parser.hasError() && impl_->ctx.coinValid * 2 >= kCoinCount;
+}
+
 bool parseCrypto(const char* json, size_t length, CryptoBoard& out) {
   if (json == nullptr || length == 0) return false;
 
   CryptoBoard parsed;
-  ParseContext ctx;
-  ctx.target = ParseContext::Target::Crypto;
-  ctx.crypto = &parsed;
-
-  StreamingJsonParser parser(makeCallbacks(ctx));
-  parser.feed(json, length);
-
-  // A couple of missing ids is survivable (the row renders as "--"), half of
-  // them means the response shape changed and the page would be misleading.
-  if (parser.hasError() || ctx.coinValid * 2 < kCoinCount) return false;
+  CryptoStreamParser sink(parsed);
+  sink.feed(json, length);
+  if (!sink.finish()) return false;
 
   parsed.ok = true;
   out = parsed;

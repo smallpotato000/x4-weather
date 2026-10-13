@@ -22,6 +22,14 @@ const CoinInfo kCoins[kCoinCount] = {
 
 const CoinInfo& coinInfo(uint8_t index) { return kCoins[index < kCoinCount ? index : 0]; }
 
+const char* cryptoSortName(CryptoSort sort) {
+  switch (sort) {
+    case CryptoSort::Gainers: return "涨幅榜";
+    case CryptoSort::Losers: return "跌幅榜";
+    default: return "表序";
+  }
+}
+
 int coinIndexForApiId(const char* apiId) {
   if (apiId == nullptr) return -1;
   for (uint8_t i = 0; i < kCoinCount; ++i) {

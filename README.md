@@ -43,8 +43,8 @@
 | 按键 | 作用 |
 |---|---|
 | 电源键（短按） | 从深睡唤醒，并进入交互会话 |
-| 左 / 上 | 上一页 |
-| 右 / 下 | 下一页 |
+| 左 / 右 | 上一页 / 下一页 |
+| 上 / 下 | 在行情页切换排序（表序 → 涨幅榜 → 跌幅榜），其它页同左/右 |
 | 确认 | 立刻重新联网取数（不必等下一轮） |
 | 返回 | 结束会话，马上休眠 |
 | 电源键（长按 2.5 s） | 关机：电池供电时真的断电；USB 供电时进入“关机＝深睡”，再按电源键唤醒 |
@@ -61,14 +61,21 @@
 
 ![空气质量](docs/preview-aqi.png)
 
-**第 4 页 · 数字货币**（BTC / ETH / XRP / BNB / SOL / TRX / XMR 兑美元 + 24 小时涨跌，▲▼ 表示方向）
+**第 4 页 · 数字货币**（BTC / ETH / XRP / BNB / SOL / TRX / XMR 兑美元，24 小时涨跌 + **7 天走势小折线**）
 
 ![数字货币](docs/preview-crypto.png)
 
-行情来自 CoinGecko 的 `simple/price`（一个请求拿 7 个币的 `usd` 与 `usd_24h_change`，
-响应约 430 字节），和空气质量一样**只在翻到该页时才请求**。想换币种或换数据源，
-改 `src/WeatherData.cpp` 里的 `kCoins` 表（符号 / 中文名 / 数据源 id）与
-`WeatherClient::fetchCrypto()` 的 URL 即可。
+在行情页按**上/下**切换排序（表序 → 涨幅榜 → 跌幅榜，选择会记住），效果：
+
+![行情·涨幅榜](docs/preview-crypto-gainers.png)
+
+- 价格带千分位、小数位自适应；▲▼ 表示 24 小时方向；虚线是 7 天前的开盘价（基准线）；
+- 数据来自 CoinGecko `coins/markets`（一个请求同时拿价格、24 小时涨跌和 168 点 7 天走势），
+  和空气质量一样**只在翻到该页时才请求**；
+- 这个响应约 28 KB，所以固件是**边收边解析**（512 字节一块直接喂给 SAX 解析器，不整包进 RAM），
+  168 点走势下采样成 48 点存进 RTC（相对首点的百分比，int16）；
+- 想换币种或数据源：改 `src/WeatherData.cpp` 的 `kCoins` 表（符号/中文名/数据源 id）与
+  `WeatherClient::fetchCrypto()` 的 URL，解析器不用动。
 
 ### 为什么“切页”只发生在设备醒着的时候
 
@@ -135,7 +142,8 @@ cycle period ≈ 68.6 s = 60 s 深睡 + 8.6 s 活跃
 活跃电流是估值（WiFi 发射有 200–300 mA 尖峰），实际续航还取决于信号强度、路由器、
 刷新间隔和电池容量。想更省就加大 `WEATHER_REFRESH_MINUTES`。
 
-交互会话是唯一"按需多花电"的地方：25 秒会话本身约 0.7 mAh（WiFi 保持连着，好让确认键/空气质量页即点即取），
+交互会话是唯一"按需多花电"的地方：25 秒会话本身约 0.7 mAh（WiFi 保持连着，好让确认键/空气质量/行情即点即取；
+行情那 28 KB 大约多花 1–2 s），
 折合每天用 10 次也才 ~7 mAh。把 `WEATHER_INTERACTIVE_SECONDS` 调小或设 0 就能省掉。
 
 ### 调试深睡设备的两个坑（都踩过了）
@@ -280,12 +288,14 @@ https://air-quality-api.open-meteo.com/v1/air-quality
   &current=european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone&timezone=auto
 ```
 
-行情（按需，翻到该页才请求）：
+行情（按需，翻到该页才请求；响应约 28 KB，流式解析）：
 
 ```
-https://api.coingecko.com/api/v3/simple/price
-  ?ids=bitcoin,ethereum,ripple,binancecoin,solana,tron,monero
-  &vs_currencies=usd&include_24hr_change=true
+https://api.coingecko.com/api/v3/coins/markets
+  ?vs_currency=usd&price_change_percentage=24h&sparkline=true
+  &ids=bitcoin,ethereum,ripple,binancecoin,solana,tron,monero
+  → [{"id":"bitcoin","current_price":83342,"price_change_percentage_24h":-0.76,
+      "sparkline_in_7d":{"price":[85500.26, ...168 点...]}}, ...]
 ```
 
 - `timezone=auto`：日预报的日期和 `current.time` 都是**当地时间**，固件只做格式化。
@@ -386,8 +396,9 @@ PREVIEW_PYTHON=/path/to/python sh tools/test_host.sh
 1. **解析测试**：`tools/preview/test_parse.cpp` 用真实的 Open-Meteo 响应
    （`tools/preview/sample_response.json`，固件请求的那条 URL 对武汉的真实返回快照）驱动
    `weather::parseForecast()`——固件里跑的就是同一份 `src/WeatherParse.cpp`。
-   覆盖：实况字段、三天下限/上限、`is_day` 昼夜图标、数组比版式长时的截断、
-   负数温度、四舍五入与日期格式化，以及截断/缺 `current`/空载荷被拒绝且**不污染上一次数据**。
+   覆盖：实况字段、三天下限/上限、逐小时 12 条、空气质量、行情（价格/涨跌/7 天走势、
+   **分块流式喂数据**与一次性解析结果一致）、geocoding、价格与涨跌格式化，
+   以及截断/缺 `current`/空载荷/只回一半币种等坏载荷被拒绝且**不污染上一次数据**。
 2. **渲染预览**：编译**和固件完全相同**的 `WeatherUi.cpp` + `CjkGlyphSource.cpp` +
    FreeInkUI 的 `DisplayTarget`，往模拟的 800×480 framebuffer 上画。`ok` 这一档会把
    录制下来的响应**过一遍同一个解析器**再渲染，所以预览图上的数字（28.4 °C / 少云 /
@@ -397,7 +408,8 @@ PREVIEW_PYTHON=/path/to/python sh tools/test_host.sh
 sh tools/preview/render.sh ok                         # 第 1 页：当前 + 三天
 sh tools/preview/render.sh hourly                     # 第 2 页：未来 12 小时
 sh tools/preview/render.sh aqi                        # 第 3 页：空气质量
-sh tools/preview/render.sh crypto                     # 第 4 页：数字货币
+sh tools/preview/render.sh crypto                     # 第 4 页：数字货币（表序）
+sh tools/preview/render.sh crypto-gainers            # 第 4 页：涨幅榜
 sh tools/preview/render.sh busy                       # 冷启动联网中的占位画面
 sh tools/preview/render.sh error                      # 取数失败
 sh tools/preview/render.sh ok /tmp/other.json /tmp/air.json   # 换数据源渲染
