@@ -2,7 +2,7 @@
 # Render the weather screen on the host — no device, no PlatformIO.
 #
 #   tools/preview/render.sh [variant] [response.json] [air.json]
-#     variant: ok (default) | hourly | aqi | busy | error
+#     variant: ok (default) | hourly | aqi | crypto | busy | error
 #     response.json / air.json: recorded Open-Meteo responses to render
 #     (default to the recorded Wuhan ones in tools/preview/)
 #
@@ -17,6 +17,7 @@ cd "$(dirname "$0")/../.."
 VARIANT="${1:-ok}"
 RESPONSE="${2:-tools/preview/sample_response.json}"
 AIR="${3:-tools/preview/sample_air_quality.json}"
+CRYPTO="${4:-tools/preview/sample_crypto.json}"
 SDK="${FREEINK_SDK:-../freeink-sdk}"
 PY="${PREVIEW_PYTHON:-python3}"
 OUT_DIR="build/preview"
@@ -30,6 +31,6 @@ c++ -std=c++17 -O1 -Wall -Wextra \
   tools/preview/render_preview.cpp \
   -o "$OUT_DIR/render_preview"
 
-"$OUT_DIR/render_preview" "$OUT_DIR/$VARIANT.pbm" "$VARIANT" "$RESPONSE" "$AIR"
+"$OUT_DIR/render_preview" "$OUT_DIR/$VARIANT.pbm" "$VARIANT" "$RESPONSE" "$AIR" "$CRYPTO"
 
 "$PY" tools/preview/to_png.py "$OUT_DIR/$VARIANT.pbm" "$OUT_DIR/${VARIANT}_native.png" "$OUT_DIR/${VARIANT}_portrait.png"

@@ -7,6 +7,10 @@
 //   * api.open-meteo.com     — current conditions + hourly + 3-day forecast
 //   * air-quality-api.open-meteo.com — European AQI + the main pollutants,
 //     fetched only when the air-quality page is actually being shown.
+//   * geocoding-api.open-meteo.com   — city name -> coordinates, once per boot
+//     (cached in RTC memory by the firmware).
+//   * api.coingecko.com              — BTC/ETH/... vs USD + 24 h change, fetched
+//     only when the crypto page is actually being shown.
 
 #include <Arduino.h>
 
@@ -46,6 +50,19 @@ class WeatherClient {
 
   // Fetch and parse the air-quality `current` block. Requires WiFi to be up.
   bool fetchAirQuality(AirQuality& out);
+
+  // Fetch and parse the crypto board (CoinGecko simple/price).
+  bool fetchCrypto(CryptoBoard& out);
+
+  // Resolve a city name to coordinates (the forecast then uses them). The name
+  // is percent-encoded, so non-ASCII city names work.
+  bool fetchGeocode(const char* city, GeoLocation& out);
+
+  // Point the forecast requests at resolved coordinates.
+  void setCoordinates(float latitude, float longitude) {
+    config_.latitude = latitude;
+    config_.longitude = longitude;
+  }
 
   // Seconds since the epoch once SNTP has set the clock; 0 means "not set".
   uint32_t epochNow() const;

@@ -12,11 +12,18 @@ constexpr uint8_t kMaxKeyLength = 31;
 
 struct ParseContext {
   enum class Section : uint8_t { None, Current, Hourly, Daily };
-  enum class Target : uint8_t { Weather, Air };
+  enum class Target : uint8_t { Weather, Air, Crypto, Geo };
 
   Target target = Target::Weather;
   WeatherReport* out = nullptr;   // weather target
   AirQuality* air = nullptr;      // air target
+  CryptoBoard* crypto = nullptr;  // crypto target
+  GeoLocation* geo = nullptr;     // geocoding target
+  int pendingCoin = -1;           // coin whose object is about to start
+  uint8_t coinIndex = 0;          // coin currently being filled
+  uint8_t coinValid = 0;          // coins with a price in this response
+  bool geoResultTaken = false;    // first geocoding result already consumed
+  bool geoHasCoords = false;
   Section section = Section::None;
   char key[kMaxKeyLength + 1] = {0};
   char arrayKey[kMaxKeyLength + 1] = {0};
@@ -37,11 +44,34 @@ void copyKey(char* destination, const char* source, size_t length) {
 // --- StreamingJsonParser callbacks -----------------------------------------
 
 void onKey(void* ctx, const char* key, size_t len) {
-  copyKey(static_cast<ParseContext*>(ctx)->key, key, len);
+  ParseContext& p = *static_cast<ParseContext*>(ctx);
+  copyKey(p.key, key, len);
+  if (p.target == ParseContext::Target::Crypto) {
+    p.pendingCoin = coinIndexForApiId(p.key);  // -1 for "usd"/"usd_24h_change"/root keys
+  }
 }
 
 void onObjectStart(void* ctx) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
+
+  if (p.target == ParseContext::Target::Crypto) {
+    if (p.pendingCoin >= 0) {
+      p.coinIndex = static_cast<uint8_t>(p.pendingCoin);
+      p.pendingCoin = -1;
+      p.section = ParseContext::Section::Current;  // re-used as "inside a coin object"
+    } else {
+      p.section = ParseContext::Section::None;
+    }
+    return;
+  }
+
+  if (p.target == ParseContext::Target::Geo) {
+    // Only the first element of `results` is interesting.
+    p.section = (p.inArray && !p.geoResultTaken) ? ParseContext::Section::Current
+                                                : ParseContext::Section::None;
+    return;
+  }
+
   if (keyIs(p.key, "current")) {
     p.section = ParseContext::Section::Current;
   } else if (p.target == ParseContext::Target::Weather && keyIs(p.key, "hourly")) {
@@ -57,6 +87,9 @@ void onObjectStart(void* ctx) {
 
 void onObjectEnd(void* ctx) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
+  if (p.target == ParseContext::Target::Geo && p.section == ParseContext::Section::Current) {
+    p.geoResultTaken = true;  // ignore any further results
+  }
   p.section = ParseContext::Section::None;
   p.inArray = false;
   p.index = 0;
@@ -64,6 +97,15 @@ void onObjectEnd(void* ctx) {
 
 void onArrayStart(void* ctx) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
+
+  if (p.target == ParseContext::Target::Geo) {
+    // `results` is the geocoding array; its first object is the city we want.
+    p.inArray = keyIs(p.key, "results");
+    p.index = 0;
+    return;
+  }
+  if (p.target != ParseContext::Target::Weather) return;
+
   if (p.section != ParseContext::Section::Daily && p.section != ParseContext::Section::Hourly) return;
   p.inArray = true;
   p.index = 0;
@@ -114,6 +156,33 @@ void handleHourlyNumber(ParseContext& p, float number) {
 void onNumber(void* ctx, const char* value, size_t) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
   const float number = std::strtof(value, nullptr);
+
+  if (p.target == ParseContext::Target::Crypto) {
+    if (p.section != ParseContext::Section::Current) return;
+    CoinQuote& coin = p.crypto->coins[p.coinIndex];
+    if (keyIs(p.key, "usd")) {
+      coin.usd = number;
+      if (!coin.valid) {
+        coin.valid = true;
+        ++p.coinValid;
+      }
+    } else if (keyIs(p.key, "usd_24h_change")) {
+      coin.change24h = number;
+    }
+    return;
+  }
+
+  if (p.target == ParseContext::Target::Geo) {
+    if (p.section != ParseContext::Section::Current) return;
+    if (keyIs(p.key, "latitude")) {
+      p.geo->latitude = number;
+      p.geoHasCoords = true;
+    } else if (keyIs(p.key, "longitude")) {
+      p.geo->longitude = number;
+      p.geoHasCoords = true;
+    }
+    return;
+  }
 
   if (p.target == ParseContext::Target::Air) {
     if (p.section != ParseContext::Section::Current) return;
@@ -178,6 +247,18 @@ void onString(void* ctx, const char* value, size_t len) {
     return;
   }
 
+  if (p.target == ParseContext::Target::Geo) {
+    if (p.section != ParseContext::Section::Current) return;
+    if (keyIs(p.key, "name")) {
+      copyTimestamp(value, len, p.geo->name, sizeof(p.geo->name));
+    } else if (keyIs(p.key, "country")) {
+      copyTimestamp(value, len, p.geo->country, sizeof(p.geo->country));
+    } else if (keyIs(p.key, "timezone")) {
+      copyTimestamp(value, len, p.geo->timezone, sizeof(p.geo->timezone));
+    }
+    return;
+  }
+
   if (p.section == ParseContext::Section::Current) {
     if (keyIs(p.key, "time")) copyTimestamp(value, len, p.out->current.time, sizeof(p.out->current.time));
     return;
@@ -205,7 +286,8 @@ void onString(void* ctx, const char* value, size_t len) {
 
 void onBool(void* ctx, bool value) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
-  if (p.target == ParseContext::Target::Weather && p.section == ParseContext::Section::Current &&
+  if (p.target != ParseContext::Target::Weather) return;
+  if (p.section == ParseContext::Section::Current &&
       keyIs(p.key, "is_day")) {
     p.out->current.isDay = value;
   }
@@ -247,6 +329,44 @@ bool parseForecast(const char* json, size_t length, WeatherReport& out) {
   parsed.dayCount = ctx.dayCount > kForecastDays ? kForecastDays : ctx.dayCount;
   parsed.hourCount = parsed.hourCount > kForecastHours ? kForecastHours : parsed.hourCount;
   parsed.ok = true;
+  out = parsed;
+  return true;
+}
+
+bool parseCrypto(const char* json, size_t length, CryptoBoard& out) {
+  if (json == nullptr || length == 0) return false;
+
+  CryptoBoard parsed;
+  ParseContext ctx;
+  ctx.target = ParseContext::Target::Crypto;
+  ctx.crypto = &parsed;
+
+  StreamingJsonParser parser(makeCallbacks(ctx));
+  parser.feed(json, length);
+
+  // A couple of missing ids is survivable (the row renders as "--"), half of
+  // them means the response shape changed and the page would be misleading.
+  if (parser.hasError() || ctx.coinValid * 2 < kCoinCount) return false;
+
+  parsed.ok = true;
+  out = parsed;
+  return true;
+}
+
+bool parseGeocode(const char* json, size_t length, GeoLocation& out) {
+  if (json == nullptr || length == 0) return false;
+
+  GeoLocation parsed;
+  ParseContext ctx;
+  ctx.target = ParseContext::Target::Geo;
+  ctx.geo = &parsed;
+
+  StreamingJsonParser parser(makeCallbacks(ctx));
+  parser.feed(json, length);
+
+  if (parser.hasError() || !ctx.geoResultTaken || !ctx.geoHasCoords) return false;
+
+  parsed.valid = true;
   out = parsed;
   return true;
 }

@@ -106,6 +106,13 @@ bool loadAirQuality(const char* path, weather::AirQuality& air) {
   return weather::parseAirQuality(json.c_str(), json.size(), air);
 }
 
+bool loadCrypto(const char* path, weather::CryptoBoard& board) {
+  if (path == nullptr) return false;
+  const std::string json = readFile(path);
+  if (json.empty()) return false;
+  return weather::parseCrypto(json.c_str(), json.size(), board);
+}
+
 int writePbm(const char* path) {
   FILE* file = std::fopen(path, "wb");
   if (file == nullptr) return 1;
@@ -122,6 +129,7 @@ int main(int argc, char** argv) {
   const char* variant = argc > 2 ? argv[2] : "ok";
   const char* responsePath = argc > 3 ? argv[3] : nullptr;
   const char* airPath = argc > 4 ? argv[4] : nullptr;
+  const char* cryptoPath = argc > 5 ? argv[5] : nullptr;
 
   // formatClock()/mktime() must agree on the wall clock the response carries.
   setenv("TZ", "UTC0", 1);
@@ -138,10 +146,13 @@ int main(int argc, char** argv) {
 
   const bool hourlyPage = std::strcmp(variant, "hourly") == 0;
   const bool airPage = std::strcmp(variant, "aqi") == 0;
-  state.page = hourlyPage ? weather::Page::Hourly : (airPage ? weather::Page::AirQuality : weather::Page::Now);
-  // The hourly/AQI pages are only reachable during a button session, so they are
+  const bool cryptoPage = std::strcmp(variant, "crypto") == 0;
+  state.page = hourlyPage ? weather::Page::Hourly
+                          : (airPage ? weather::Page::AirQuality
+                                     : (cryptoPage ? weather::Page::Crypto : weather::Page::Now));
+  // The extra pages are only reachable during a button session, so they are
   // previewed with the paging hint visible.
-  state.interactive = hourlyPage || airPage;
+  state.interactive = hourlyPage || airPage || cryptoPage;
 
   if (std::strcmp(variant, "busy") == 0) {
     state.busy = true;
@@ -157,8 +168,11 @@ int main(int argc, char** argv) {
       fillSyntheticReport(report);
       report.fetchedEpoch = epochFromIso(report.current.time);
     }
-    if (airPage && loadAirQuality(airPath, report.air)) {
-      // Real air-quality numbers, straight from the recorded response.
+    if (airPage) {
+      loadAirQuality(airPath, report.air);  // recorded numbers, or a "--" page
+    }
+    if (cryptoPage) {
+      loadCrypto(cryptoPath, report.crypto);
     }
     state.report = &report;
     // Same footer the firmware composes after a successful fetch.

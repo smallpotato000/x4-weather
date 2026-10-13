@@ -26,6 +26,6 @@ c++ $CXXFLAGS \
 
 echo
 echo "== rendered previews =="
-for variant in ok hourly aqi busy error; do
+for variant in ok hourly aqi crypto busy error; do
   PREVIEW_PYTHON="$PY" sh tools/preview/render.sh "$variant"
 done

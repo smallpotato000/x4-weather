@@ -39,6 +39,9 @@ constexpr int16_t kHourRowHeight = 46;
 constexpr int16_t kPollutantRowsTop = 470;
 constexpr int16_t kPollutantRowHeight = 62;
 
+constexpr int16_t kCoinRowsTop = 178;
+constexpr int16_t kCoinRowHeight = 82;
+
 static_assert(kIconCount == static_cast<uint8_t>(Icon::Thunder) + 1,
               "WeatherIcons.h order must match weather::Icon");
 static_assert(kForecastDays == 3, "the Now page reserves exactly three forecast rows");
@@ -106,7 +109,26 @@ const char* pageName(Page page) {
   switch (page) {
     case Page::Hourly: return "未来 12 小时";
     case Page::AirQuality: return "空气质量";
+    case Page::Crypto: return "数字货币";
     default: return "";
+  }
+}
+
+// Small direction marker for a 24 h change: filled pointing up when the price
+// rose, down when it fell, a dash when it barely moved.
+void drawTrendMarker(DisplayTarget& target, int16_t centerX, int16_t centerY, float changePercent) {
+  const Paint ink = Paint::solid(Color::Black);
+  if (changePercent > 0.05f) {
+    target.triangle(freeink::ui::Point{centerX, static_cast<int16_t>(centerY - 6)},
+                    freeink::ui::Point{static_cast<int16_t>(centerX - 7), static_cast<int16_t>(centerY + 5)},
+                    freeink::ui::Point{static_cast<int16_t>(centerX + 7), static_cast<int16_t>(centerY + 5)}, ink);
+  } else if (changePercent < -0.05f) {
+    target.triangle(freeink::ui::Point{centerX, static_cast<int16_t>(centerY + 6)},
+                    freeink::ui::Point{static_cast<int16_t>(centerX - 7), static_cast<int16_t>(centerY - 5)},
+                    freeink::ui::Point{static_cast<int16_t>(centerX + 7), static_cast<int16_t>(centerY - 5)}, ink);
+  } else {
+    target.line(freeink::ui::Point{static_cast<int16_t>(centerX - 6), centerY},
+                freeink::ui::Point{static_cast<int16_t>(centerX + 6), centerY}, 2, ink);
   }
 }
 
@@ -356,6 +378,49 @@ void drawAirQualityPage(DisplayTarget& target, const WeatherReport& report) {
   drawPollutantRow(target, kPollutantRowsTop + 3 * kPollutantRowHeight, "二氧化氮", air.no2);
 }
 
+void drawCryptoPage(DisplayTarget& target, const WeatherReport& report) {
+  drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, kMargin, 150, pageName(Page::Crypto),
+           TextAlign::Left, 300, Color::Black);
+  drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 150, 150, "兑美元 USD",
+           TextAlign::Right, 150, Color::Black);
+
+  if (!report.crypto.ok) {
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 0, 400, "行情获取失败", TextAlign::Center, kWidth,
+             Color::Black);
+    return;
+  }
+
+  for (uint8_t i = 0; i < kCoinCount; ++i) {
+    const CoinInfo& info = coinInfo(i);
+    const CoinQuote& quote = report.crypto.coins[i];
+    const int16_t rowTop = static_cast<int16_t>(kCoinRowsTop + i * kCoinRowHeight);
+    const int16_t baseline = static_cast<int16_t>(rowTop + 56);
+    if (i > 0) drawDashedRule(target, static_cast<int16_t>(rowTop - 10), kMargin, kWidth - kMargin);
+
+    drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, kMargin, baseline, info.symbol, TextAlign::Left,
+             80, Color::Black);
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 110, baseline, info.nameZh, TextAlign::Left, 96,
+             Color::Black);
+
+    if (!quote.valid) {
+      drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 150, baseline, "--",
+               TextAlign::Right, 150, Color::Black);
+      continue;
+    }
+
+    char price[24];
+    formatUsd(quote.usd, price, sizeof(price));
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 190, baseline, price, TextAlign::Right, 150,
+             Color::Black);
+
+    char change[16];
+    formatPercent(quote.change24h, change, sizeof(change));
+    drawTrendMarker(target, 372, static_cast<int16_t>(baseline - 8), quote.change24h);
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 74, baseline, change,
+             TextAlign::Right, 74, Color::Black);
+  }
+}
+
 void drawPlaceholder(DisplayTarget& target, const ScreenState& state) {
   drawIcon(target, Icon::Unknown, Rect{176, 200, 128, 128}, false);
   drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, 0, 420,
@@ -403,6 +468,9 @@ void renderWeatherScreen(DisplayTarget& target, const ScreenState& state) {
       break;
     case Page::AirQuality:
       drawAirQualityPage(target, *report);
+      break;
+    case Page::Crypto:
+      drawCryptoPage(target, *report);
       break;
     case Page::Now:
     default:

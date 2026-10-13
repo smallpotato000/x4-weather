@@ -128,6 +128,52 @@ void testRecordedAirQuality(const std::string& json) {
   check(weather::aqiLevelIndex(0) == 0 && weather::aqiLevelIndex(21) == 1, "band edges");
 }
 
+void testRecordedCrypto(const std::string& json) {
+  std::printf("recorded crypto response (%zu bytes)\n", json.size());
+  weather::CryptoBoard board;
+  const bool ok = weather::parseCrypto(json.c_str(), json.size(), board);
+  check(ok, "parses");
+  if (!ok) return;
+
+  check(board.ok, "marked ok");
+  check(board.coins[0].valid && board.coins[6].valid, "first and last coin valid");
+  checkFloat(board.coins[0].usd, 83393.0f, "BTC price");
+  checkFloat(board.coins[0].change24h, -0.3218f, "BTC 24 h change");
+  checkFloat(board.coins[1].usd, 2514.03f, "ETH price");
+  checkFloat(board.coins[3].usd, 744.46f, "BNB price");
+  checkFloat(board.coins[5].usd, 0.329837f, "TRX price");
+  checkFloat(board.coins[6].usd, 530.52f, "XMR price");
+  checkString(weather::coinInfo(0).symbol, "BTC", "coin 0 symbol");
+  checkString(weather::coinInfo(6).nameZh, "门罗币", "coin 6 name");
+  check(weather::coinIndexForApiId("monero") == 6, "api id -> table index");
+  check(weather::coinIndexForApiId("dogecoin") == -1, "unknown api id -> -1");
+
+  char buffer[32];
+  checkString(weather::formatUsd(83393.0f, buffer, sizeof(buffer)), "$83,393", "usd above 10k");
+  checkString(weather::formatUsd(2514.03f, buffer, sizeof(buffer)), "$2,514.03", "usd below 10k");
+  checkString(weather::formatUsd(1.37f, buffer, sizeof(buffer)), "$1.37", "usd below 10");
+  checkString(weather::formatUsd(0.329837f, buffer, sizeof(buffer)), "$0.3298", "usd below 1");
+  checkString(weather::formatUsd(1234567.0f, buffer, sizeof(buffer)), "$1,234,567", "two separators");
+  checkString(weather::formatPercent(-3.628f, buffer, sizeof(buffer)), "-3.6%", "negative percent");
+  checkString(weather::formatPercent(2.44f, buffer, sizeof(buffer)), "+2.4%", "positive percent");
+  checkString(weather::formatPercent(0.01f, buffer, sizeof(buffer)), "+0.0%", "flat percent");
+}
+
+void testRecordedGeocode(const std::string& json) {
+  std::printf("recorded geocoding response (%zu bytes)\n", json.size());
+  weather::GeoLocation geo;
+  const bool ok = weather::parseGeocode(json.c_str(), json.size(), geo);
+  check(ok, "parses");
+  if (!ok) return;
+
+  check(geo.valid, "marked valid");
+  checkString(geo.name, "Wuhan", "name");
+  checkString(geo.country, "China", "country");
+  checkString(geo.timezone, "Asia/Shanghai", "timezone");
+  checkFloat(geo.latitude, 30.58333f, "latitude");
+  checkFloat(geo.longitude, 114.26667f, "longitude");
+}
+
 void testLongArraysAreCapped() {
   std::printf("longer-than-layout arrays\n");
   const char* json =
@@ -172,6 +218,19 @@ void testRejectsBrokenPayloads() {
   check(!weather::parseForecast("", 0, report), "empty payload rejected");
   checkFloat(report.current.temperatureC, 12.5f, "failed forecast left the report untouched");
 
+  weather::CryptoBoard board;
+  weather::GeoLocation geo;
+  // One coin out of seven is below the "half the table" floor: reject it rather
+  // than render a page that looks like the market vanished.
+  const char* partialCrypto = "{\"bitcoin\":{\"usd\":83393,\"usd_24h_change\":-0.3}}";
+  check(!weather::parseCrypto(partialCrypto, std::strlen(partialCrypto), board), "partial crypto rejected");
+  const char* brokenCrypto = "{\"bitcoin\":{\"usd\":83";
+  check(!weather::parseCrypto(brokenCrypto, std::strlen(brokenCrypto), board), "truncated crypto rejected");
+  const char* emptyResults = "{\"results\":[]}";
+  check(!weather::parseGeocode(emptyResults, std::strlen(emptyResults), geo), "empty geocoding results rejected");
+  const char* noCoords = "{\"results\":[{\"name\":\"Nowhere\"}]}";
+  check(!weather::parseGeocode(noCoords, std::strlen(noCoords), geo), "geocoding result without coords rejected");
+
   const char* airNoCurrent = "{\"current_units\":{\"european_aqi\":\"EAQI\"}}";
   check(!weather::parseAirQuality(airNoCurrent, std::strlen(airNoCurrent), air), "air response without data rejected");
   const char* airTruncated = "{\"current\":{\"european_aqi\":8";
@@ -185,6 +244,8 @@ void testRejectsBrokenPayloads() {
 int main(int argc, char** argv) {
   const char* forecastPath = argc > 1 ? argv[1] : "tools/preview/sample_response.json";
   const char* airPath = argc > 2 ? argv[2] : "tools/preview/sample_air_quality.json";
+  const char* cryptoPath = argc > 3 ? argv[3] : "tools/preview/sample_crypto.json";
+  const char* geocodePath = argc > 4 ? argv[4] : "tools/preview/sample_geocode.json";
   bool ok = false;
   const std::string forecast = readFile(forecastPath, ok);
   if (!ok) {
@@ -196,9 +257,21 @@ int main(int argc, char** argv) {
     std::printf("error: cannot read %s (run from the project root)\n", airPath);
     return 2;
   }
+  const std::string crypto = readFile(cryptoPath, ok);
+  if (!ok) {
+    std::printf("error: cannot read %s (run from the project root)\n", cryptoPath);
+    return 2;
+  }
+  const std::string geocode = readFile(geocodePath, ok);
+  if (!ok) {
+    std::printf("error: cannot read %s (run from the project root)\n", geocodePath);
+    return 2;
+  }
 
   testRecordedForecast(forecast);
   testRecordedAirQuality(air);
+  testRecordedCrypto(crypto);
+  testRecordedGeocode(geocode);
   testLongArraysAreCapped();
   testRejectsBrokenPayloads();
 

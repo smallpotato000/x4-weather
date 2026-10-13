@@ -4,8 +4,9 @@
 [FreeInk SDK](../freeink-sdk) 开发：醒来 → 连 WiFi → 取回**武汉**的当前天气和未来
 三天预报 → 以 **480×800 竖屏**渲染并整屏刷新 → 关射频、关面板、进入 **deep sleep**，
 **30 分钟**后由 RTC 定时器唤醒，如此循环。深睡期间墨水屏保持最后一帧画面；
-按一下电源键立刻唤醒并进入**交互会话**，左右键可在**当前 / 逐小时 / 空气质量**三页之间切换，
-长按电源键则关机。
+按一下电源键立刻唤醒并进入**交互会话**，左右键可在**当前 / 逐小时 / 空气质量 / 数字货币**四页之间切换，
+长按电源键则关机。定位只要写城市名（Open-Meteo geocoding 自动解析坐标），
+行情页显示 BTC/ETH/XRP/BNB/SOL/TRX/XMR 对美元的实时价格与 24 小时涨跌。
 
 ![竖屏效果](docs/preview-portrait.png)
 
@@ -35,9 +36,9 @@
 - **失败早重试**：取数失败 5 分钟后再试（`WEATHER_RETRY_MINUTES`），成功则回到 30 分钟。
 - **时间不会漂**：深睡期间 RTC 继续走时，每次醒来还会重新 SNTP 对时，底栏时间始终准。
 
-## 2. 按键与三个页面
+## 2. 按键与四个页面
 
-屏幕有三页，左右键翻页，页号显示在底栏右侧（如 `2/3`）：
+屏幕有四页，左右键翻页，页号显示在底栏右侧（如 `2/4`）：
 
 | 按键 | 作用 |
 |---|---|
@@ -60,6 +61,15 @@
 
 ![空气质量](docs/preview-aqi.png)
 
+**第 4 页 · 数字货币**（BTC / ETH / XRP / BNB / SOL / TRX / XMR 兑美元 + 24 小时涨跌，▲▼ 表示方向）
+
+![数字货币](docs/preview-crypto.png)
+
+行情来自 CoinGecko 的 `simple/price`（一个请求拿 7 个币的 `usd` 与 `usd_24h_change`，
+响应约 430 字节），和空气质量一样**只在翻到该页时才请求**。想换币种或换数据源，
+改 `src/WeatherData.cpp` 里的 `kCoins` 表（符号 / 中文名 / 数据源 id）与
+`WeatherClient::fetchCrypto()` 的 URL 即可。
+
 ### 为什么“切页”只发生在设备醒着的时候
 
 C3 X4 的六个导航键挂在 **ADC 电阻梯**上（GPIO1/GPIO2 各一组），按下时是分压电压而不是干净的低电平，
@@ -73,7 +83,9 @@ C3 X4 的六个导航键挂在 **ADC 电阻梯**上（GPIO1/GPIO2 各一组）�
 
 - **页面会被记住**（存在 RTC memory 里）：下一轮 30 分钟的自动刷新直接画你最后看的那一页，不会跳回第一页。
 - **定时唤醒不会为按键白耗电**：那 30 分钟一次的自动画面上，设备只多等 1.2 秒看有没有人按键，没人按就睡。
-- 空气质量页的数据来自**第二个接口**，只在需要显示时才请求（省一次 TLS 握手）：会话里第一次翻到该页时抓一次。
+- 空气质量页与行情页各用**自己的接口**，都只在需要显示时才请求（省 TLS 握手与流量）：会话里第一次翻到该页时抓一次。
+- **城市名定位**：`WEATHER_CITY` 只写城市名（中英文都行，UTF-8），首次开机通过 geocoding 解析成坐标并**存在 RTC memory**，
+  之后不再请求；解析失败就退回 `WEATHER_LATITUDE/LONGITUDE` 兜底。
 
 ## 3. 真机实测与功耗
 
@@ -241,7 +253,7 @@ X3/X4 的导航键挂在 **ADC 电阻梯**上（`BoardConfig::ACTIVE.inputStyle 
 
 ## 8. 天气数据与刷新策略
 
-两个接口（`src/WeatherClient.cpp`）。天气那个每轮都请求：
+四个接口（`src/WeatherClient.cpp`）：天气每轮请求，另外三个按需。天气：
 
 ```
 https://api.open-meteo.com/v1/forecast
@@ -252,12 +264,28 @@ https://api.open-meteo.com/v1/forecast
   &timezone=auto&forecast_days=3
 ```
 
-空气质量是**按需**的第二个请求（逐小时页/当前页用不到它，就不花这次 TLS 握手）：
+定位（只在第一次开机、或城市名变了时请求一次，结果存 RTC memory）：
+
+```
+https://geocoding-api.open-meteo.com/v1/search?count=1&format=json&name=Wuhan
+  → {"results":[{"name":"Wuhan","latitude":30.58333,"longitude":114.26667,
+                 "timezone":"Asia/Shanghai","country":"China", ...}]}
+```
+
+空气质量（按需，翻到该页才请求）：
 
 ```
 https://air-quality-api.open-meteo.com/v1/air-quality
-  ?latitude=30.5928&longitude=114.3055
+  ?latitude=30.5833&longitude=114.2667
   &current=european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone&timezone=auto
+```
+
+行情（按需，翻到该页才请求）：
+
+```
+https://api.coingecko.com/api/v3/simple/price
+  ?ids=bitcoin,ethereum,ripple,binancecoin,solana,tron,monero
+  &vs_currencies=usd&include_24hr_change=true
 ```
 
 - `timezone=auto`：日预报的日期和 `current.time` 都是**当地时间**，固件只做格式化。
@@ -301,7 +329,7 @@ x4-weather/
 │   ├── gen_icons.py            # 天气图标（Pillow 画矢量 → 4× 超采样 → 二值化）
 │   ├── charset_extra.txt       # 额外字符（城市名等）
 │   ├── fonts/README.md         # 字体来源与许可
-│   └── preview/                # 主机端渲染预览（render.sh / to_png.py / 测试 / 三份真实响应快照）
+│   └── preview/                # 主机端渲染预览（render.sh / to_png.py / 测试 / 四份真实响应快照）
 └── docs/                       # README 用的预览图
 ```
 
@@ -309,8 +337,9 @@ x4-weather/
 
 | 宏 | 默认 | 作用 |
 |---|---|---|
-| `WEATHER_PLACE` | `"武汉"` | 标题栏地名（中文会被自动烘进字体） |
-| `WEATHER_LATITUDE` / `WEATHER_LONGITUDE` | `30.5928` / `114.3055` | 坐标 |
+| `WEATHER_CITY` | `"Wuhan"` | 用于 geocoding 的城市名（中英文皆可；空 = 不 geocoding） |
+| `WEATHER_PLACE` | `"武汉"` | 标题栏地名；留空 `""` 则用 geocoding 返回的名字 |
+| `WEATHER_LATITUDE` / `WEATHER_LONGITUDE` | `30.5928` / `114.3055` | geocoding 失败时的兜底坐标 |
 | `WEATHER_REFRESH_MINUTES` | `30` | 深睡时长 = 刷新间隔 |
 | `WEATHER_RETRY_MINUTES` | `5` | 取数失败后的重试间隔 |
 | `WEATHER_WAKE_ON_BUTTON` | `1` | 是否允许按键唤醒（只有电源键能唤醒，导航键在电阻梯上） |
@@ -368,6 +397,7 @@ PREVIEW_PYTHON=/path/to/python sh tools/test_host.sh
 sh tools/preview/render.sh ok                         # 第 1 页：当前 + 三天
 sh tools/preview/render.sh hourly                     # 第 2 页：未来 12 小时
 sh tools/preview/render.sh aqi                        # 第 3 页：空气质量
+sh tools/preview/render.sh crypto                     # 第 4 页：数字货币
 sh tools/preview/render.sh busy                       # 冷启动联网中的占位画面
 sh tools/preview/render.sh error                      # 取数失败
 sh tools/preview/render.sh ok /tmp/other.json /tmp/air.json   # 换数据源渲染
@@ -375,7 +405,7 @@ sh tools/preview/render.sh ok /tmp/other.json /tmp/air.json   # 换数据源渲�
 # build/preview/<variant>_native.png    面板原生扫描方向（= framebuffer 内容）
 ```
 
-三个数据（天气、逐小时、空气质量）都来自 `tools/preview/sample_*.json` 里的真实响应快照，
+四份数据（天气含逐小时、空气质量、行情、geocoding）都来自 `tools/preview/sample_*.json` 里的真实响应快照，
 并且都会**过一遍固件同一个解析器**再画——所以预览图上的数字就是真机上的数字。
 
 ## 13. 之后可以怎么加

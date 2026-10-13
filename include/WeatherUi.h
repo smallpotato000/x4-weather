@@ -9,6 +9,7 @@
 //   Now        — current conditions + the three-day rows (the standing image)
 //   Hourly     — the next 12 hours, one row each
 //   AirQuality — European AQI + the main pollutants
+//   Crypto     — BTC/ETH/XRP/BNB/SOL/TRX/XMR vs USD with the 24 h change
 
 #include <FreeInkUIDisplayTarget.h>
 
@@ -27,8 +28,9 @@ enum class Page : uint8_t {
   Now = 0,
   Hourly = 1,
   AirQuality = 2,
+  Crypto = 3,
 };
-static constexpr uint8_t kPageCount = 3;
+static constexpr uint8_t kPageCount = 4;
 
 // Point the slots at the generated fonts and install the CJK fallback.
 void configureWeatherFonts(freeink::ui::DisplayTarget& target, CjkGlyphSource& fallback);

@@ -48,11 +48,15 @@ RTC_DATA_ATTR uint32_t wakeCount = 0;
 // cannot reach the network then repaints the cached weather plus a failure
 // footer instead of dropping back to the "no data" placeholder. Magic-guarded
 // because RTC memory holds garbage on a cold boot.
-// Magic bumped when WeatherReport's layout changes (the hourly/AQI fields
-// were added in 'WXC2'), so a stale RTC cache from an older build is ignored.
-constexpr uint32_t kCacheMagic = 0x57584332;  // 'WXC2'
+// Magic bumped whenever WeatherReport's layout changes (hourly + air quality in
+// 'WXC2', crypto in 'WXC3'), so a stale RTC cache from an older build is
+// ignored. The geocoded location has its own magic.
+constexpr uint32_t kCacheMagic = 0x57584333;  // 'WXC3'
+constexpr uint32_t kLocationMagic = 0x574C4331;  // 'WLC1'
 RTC_DATA_ATTR uint32_t cacheMagic = 0;
 RTC_DATA_ATTR weather::WeatherReport cachedReport;
+RTC_DATA_ATTR uint32_t locationMagic = 0;
+RTC_DATA_ATTR weather::GeoLocation cachedLocation;
 
 // The page the user last looked at, so the next automatic refresh paints the
 // same one instead of snapping back to the current conditions.
@@ -93,6 +97,8 @@ weather::CjkGlyphSource cjkGlyphSource;
 freeink::ui::DisplayTarget* target = nullptr;
 
 char statusLine[64] = {0};
+char displayPlace[32] = {0};  // header label: config name, else the geocoded one
+weather::GeoLocation location;
 bool haveReport = false;
 bool firstAttemptDone = false;
 bool coldBoot = true;
@@ -105,7 +111,7 @@ void paint(EInkDisplay::RefreshMode mode) {
   if (target == nullptr) return;
   weather::ScreenState state;
   state.report = haveReport ? &report : nullptr;
-  state.place = WEATHER_PLACE;
+  state.place = displayPlace[0] != '\0' ? displayPlace : WEATHER_PLACE;
   state.status = statusLine;
   state.page = page;
   state.busy = !firstAttemptDone;
@@ -165,6 +171,49 @@ bool powerKeyHeldForPowerOff() {
   freeink::PowerManager::deepSleep();  // no timer: only the power key comes back
 }
 
+// --- location ---------------------------------------------------------------
+
+// Point the client at the resolved coordinates and pick the header label.
+void applyLocation() {
+  if (location.valid) {
+    client.setCoordinates(location.latitude, location.longitude);
+  } else {
+    client.setCoordinates(WEATHER_LATITUDE, WEATHER_LONGITUDE);
+  }
+
+  if (WEATHER_PLACE[0] != '\0') {
+    snprintf(displayPlace, sizeof(displayPlace), "%s", WEATHER_PLACE);
+  } else if (location.valid && location.name[0] != '\0') {
+    snprintf(displayPlace, sizeof(displayPlace), "%s", location.name);
+  } else {
+    snprintf(displayPlace, sizeof(displayPlace), "天气");
+  }
+}
+
+// Resolve WEATHER_CITY to coordinates once and keep them in RTC memory; falls
+// back to the configured latitude/longitude when geocoding fails or no city is
+// configured. Needs WiFi to be up.
+void ensureLocation() {
+  if (location.valid || WEATHER_CITY[0] == '\0') {
+    applyLocation();
+    return;
+  }
+
+  weather::GeoLocation found;
+  if (!client.fetchGeocode(WEATHER_CITY, found)) {
+    Serial.printf("[weather] geocoding failed: %s — using the configured coordinates\n",
+                  client.lastError());
+    applyLocation();
+    return;
+  }
+  location = found;
+  locationMagic = kLocationMagic;
+  Serial.printf("[weather] geocoded \"%s\" -> %.4f, %.4f (%s, %s)\n", WEATHER_CITY,
+                static_cast<double>(found.latitude), static_cast<double>(found.longitude), found.timezone,
+                found.country);
+  applyLocation();
+}
+
 // --- data -------------------------------------------------------------------
 
 // Fetches the forecast into `report` (assumes WiFi is up). Returns false and
@@ -177,9 +226,14 @@ bool fetchWeather() {
   cachedReport = report;
   cacheMagic = kCacheMagic;
 
-  char clock[8];
-  weather::formatClock(report.fetchedEpoch, clock, sizeof(clock));
-  snprintf(statusLine, sizeof(statusLine), "更新于 %s", clock);
+  // The API reports local time (timezone=auto), so the footer is right wherever
+  // the geocoded city is — no timezone bookkeeping needed for the display.
+  char observation[8];
+  weather::formatHourLabel(report.current.time, observation, sizeof(observation));
+  if (observation[0] == '\0') {
+    weather::formatClock(report.fetchedEpoch, observation, sizeof(observation));
+  }
+  snprintf(statusLine, sizeof(statusLine), "更新于 %s", observation);
   Serial.printf("[weather] %s %.1f C, code %u, %u day(s), %u hour(s)\n", report.place,
                 static_cast<double>(report.current.temperatureC), static_cast<unsigned>(report.current.code),
                 static_cast<unsigned>(report.dayCount), static_cast<unsigned>(report.hourCount));
@@ -201,6 +255,25 @@ bool ensureAirQuality() {
   cachedReport = report;
   cacheMagic = kCacheMagic;
   Serial.printf("[weather] EAQI %d, PM2.5 %.1f\n", air.europeanAqi, static_cast<double>(air.pm25));
+  return true;
+}
+
+// The crypto board is a third endpoint (CoinGecko) and, like air quality, is
+// only requested while its page is on screen.
+bool ensureCrypto() {
+  if (report.crypto.ok) return true;
+  if (!client.wifiConnected() && !client.beginWifi()) return false;
+
+  weather::CryptoBoard board;
+  if (!client.fetchCrypto(board)) {
+    Serial.printf("[weather] crypto failed: %s\n", client.lastError());
+    return false;
+  }
+  report.crypto = board;
+  cachedReport = report;
+  cacheMagic = kCacheMagic;
+  Serial.printf("[weather] BTC %.0f / ETH %.2f / XMR %.2f\n", static_cast<double>(board.coins[0].usd),
+                static_cast<double>(board.coins[1].usd), static_cast<double>(board.coins[6].usd));
   return true;
 }
 
@@ -316,21 +389,25 @@ uint32_t runCycle(bool isColdBoot) {
     } else {
       shouldPaint = false;  // keep the last good frame
     }
-  } else if (fetchWeather()) {
-    // The AQI page needs a second request; only pay for it when it is on screen
-    // (or about to be, via the persisted page).
-    if (page == weather::Page::AirQuality) ensureAirQuality();
   } else {
-    Serial.printf("[weather] fetch failed: %s\n", client.lastError());
-    sleepMinutes = WEATHER_RETRY_MINUTES;
-    char clock[8];
-    weather::formatClock(client.epochNow(), clock, sizeof(clock));
-    if (haveReport) {
-      snprintf(statusLine, sizeof(statusLine), "获取失败 %s，显示上次数据", clock);
-    } else if (isColdBoot) {
-      setStatus("获取失败，请检查网络与位置");
+    // Coordinates first (a city name is resolved once, then cached in RTC), then
+    // the forecast, then whatever extra data the visible page needs.
+    ensureLocation();
+    if (fetchWeather()) {
+      if (page == weather::Page::AirQuality) ensureAirQuality();
+      if (page == weather::Page::Crypto) ensureCrypto();
     } else {
-      shouldPaint = false;  // keep the last good frame
+      Serial.printf("[weather] fetch failed: %s\n", client.lastError());
+      sleepMinutes = WEATHER_RETRY_MINUTES;
+      char clock[8];
+      weather::formatClock(client.epochNow(), clock, sizeof(clock));
+      if (haveReport) {
+        snprintf(statusLine, sizeof(statusLine), "获取失败 %s，显示上次数据", clock);
+      } else if (isColdBoot) {
+        setStatus("获取失败，请检查网络与位置");
+      } else {
+        shouldPaint = false;  // keep the last good frame
+      }
     }
   }
 
@@ -394,13 +471,19 @@ void interactiveSession(int initialButton) {
         repaint = true;
       } else if (button == InputManager::BTN_CONFIRM) {
         Serial.println("[weather] confirm: re-fetching");
-        if (client.wifiConnected() || client.beginWifi()) fetchWeather();
+        if (client.wifiConnected() || client.beginWifi()) {
+          ensureLocation();
+          fetchWeather();
+          if (page == weather::Page::AirQuality) ensureAirQuality();
+          if (page == weather::Page::Crypto) ensureCrypto();
+        }
         repaint = true;
       }
 
       if (repaint) {
         pageIndex = static_cast<uint8_t>(page);
         if (page == weather::Page::AirQuality) ensureAirQuality();
+        if (page == weather::Page::Crypto) ensureCrypto();
         paint(EInkDisplay::FAST_REFRESH);  // snappy page flips
       }
     }
@@ -462,11 +545,16 @@ void setup() {
   // UI lays out in a 480x800 logical frame that reads upright on the held-tall X4.
   weather::configureWeatherFonts(*target, cjkGlyphSource);
 
-  // Restore the previous cycle's report and the selected page (RTC memory).
+  // Restore the previous cycle's report, the geocoded location and the selected
+  // page (RTC memory).
   if (cacheMagic == kCacheMagic && cachedReport.ok) {
     report = cachedReport;
     haveReport = true;
   }
+  if (locationMagic == kLocationMagic && cachedLocation.valid) {
+    location = cachedLocation;
+  }
+  applyLocation();
   if (pageIndex < weather::kPageCount) page = static_cast<weather::Page>(pageIndex);
 
   input.begin();

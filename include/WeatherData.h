@@ -17,6 +17,9 @@ static constexpr uint8_t kForecastDays = 3;
 // How many hourly entries the "hourly" page lists.
 static constexpr uint8_t kForecastHours = 12;
 
+// How many coins the crypto page lists.
+static constexpr uint8_t kCoinCount = 7;
+
 struct CurrentWeather {
   bool valid = false;
   char time[20] = {0};  // local ISO-8601, "2026-10-12T16:30"
@@ -56,6 +59,36 @@ struct AirQuality {
   float ozone = 0.0f;
 };
 
+// One row of the crypto page. The symbol/name come from the static table below;
+// only the quote is fetched.
+struct CoinInfo {
+  const char* symbol;  // "BTC"
+  const char* nameZh;  // "比特币"
+  const char* apiId;   // provider id (CoinGecko), "bitcoin"
+};
+
+struct CoinQuote {
+  bool valid = false;
+  float usd = 0.0f;
+  float change24h = 0.0f;  // percent, negative when down
+};
+
+struct CryptoBoard {
+  bool ok = false;
+  uint32_t fetchedEpoch = 0;
+  CoinQuote coins[kCoinCount];
+};
+
+// Geocoding result: the coordinates the forecast is actually requested for.
+struct GeoLocation {
+  bool valid = false;
+  char name[32] = {0};      // name as returned by the API (ASCII)
+  char country[24] = {0};
+  char timezone[32] = {0};  // IANA name, informational
+  float latitude = 0.0f;
+  float longitude = 0.0f;
+};
+
 struct WeatherReport {
   bool ok = false;
   char place[32] = {0};  // display name from config (UTF-8)
@@ -65,6 +98,7 @@ struct WeatherReport {
   HourlyForecast hours[kForecastHours];
   uint8_t hourCount = 0;
   AirQuality air;
+  CryptoBoard crypto;
   // Epoch seconds of the local fetch time (0 when the clock was not set).
   uint32_t fetchedEpoch = 0;
 };
@@ -121,5 +155,18 @@ const char* formatWhole(float value, char* out, size_t outLen);
 
 // Short date for a forecast row: "10-12". Empty string when malformed.
 const char* formatShortDate(const char* iso, char* out, size_t outLen);
+
+// "$83,393" / "$2,514.03" / "$0.3298": thousands separators and adaptive
+// decimals (0 above 10k, 2 above 1, 4 below).
+const char* formatUsd(float usd, char* out, size_t outLen);
+
+// "+2.4%" / "-3.6%" — explicit sign, one decimal.
+const char* formatPercent(float percent, char* out, size_t outLen);
+
+// Coin table entry (index order is the crypto page's display order).
+const CoinInfo& coinInfo(uint8_t index);
+
+// Index of the coin whose provider id matches, or -1.
+int coinIndexForApiId(const char* apiId);
 
 }  // namespace weather

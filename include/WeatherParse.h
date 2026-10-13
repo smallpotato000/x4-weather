@@ -23,4 +23,14 @@ bool parseForecast(const char* json, size_t length, WeatherReport& out);
 // `out` is left untouched.
 bool parseAirQuality(const char* json, size_t length, AirQuality& out);
 
+// Parses a CoinGecko /api/v3/simple/price response
+// ({"bitcoin":{"usd":83393,"usd_24h_change":-0.32},...}) into the coin table.
+// Coins the response omits stay invalid; fewer than half the table present is
+// treated as a failure.
+bool parseCrypto(const char* json, size_t length, CryptoBoard& out);
+
+// Parses a geocoding-api.open-meteo.com /v1/search response's first result
+// (name, country, timezone, latitude, longitude).
+bool parseGeocode(const char* json, size_t length, GeoLocation& out);
+
 }  // namespace weather

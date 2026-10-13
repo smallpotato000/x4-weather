@@ -15,6 +15,29 @@ namespace {
 // Sanity floor for "the clock is set": 2020-09-13.
 constexpr uint32_t kEpochFloor = 1600000000u;
 
+// Percent-encode a UTF-8 string for a query parameter (city names may be
+// non-ASCII; the geocoding API expects them encoded).
+String urlEncode(const char* text) {
+  static const char* kHex = "0123456789ABCDEF";
+  String encoded;
+  if (text == nullptr) return encoded;
+  for (const uint8_t* cursor = reinterpret_cast<const uint8_t*>(text); *cursor != 0; ++cursor) {
+    const uint8_t c = *cursor;
+    const bool unreserved = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+                            c == '-' || c == '_' || c == '.' || c == '~';
+    if (unreserved) {
+      encoded += static_cast<char>(c);
+    } else if (c == ' ') {
+      encoded += '+';
+    } else {
+      encoded += '%';
+      encoded += kHex[c >> 4];
+      encoded += kHex[c & 0x0F];
+    }
+  }
+  return encoded;
+}
+
 }  // namespace
 
 uint32_t WeatherClient::epochNow() const {
@@ -144,6 +167,55 @@ bool WeatherClient::fetchAirQuality(AirQuality& out) {
   AirQuality parsed;
   if (!parseAirQuality(payload.c_str(), payload.length(), parsed)) {
     lastError_ = "unexpected air-quality response";
+    return false;
+  }
+  out = parsed;
+  return true;
+}
+
+bool WeatherClient::fetchCrypto(CryptoBoard& out) {
+  lastError_ = "";
+  if (WiFi.status() != WL_CONNECTED) {
+    lastError_ = "WiFi not connected";
+    return false;
+  }
+
+  String url = "https://api.coingecko.com/api/v3/simple/price?ids=";
+  for (uint8_t i = 0; i < kCoinCount; ++i) {
+    if (i > 0) url += ',';
+    url += coinInfo(i).apiId;
+  }
+  url += "&vs_currencies=usd&include_24hr_change=true";
+
+  String payload;
+  if (!httpGet(url, payload)) return false;
+
+  CryptoBoard parsed;
+  if (!parseCrypto(payload.c_str(), payload.length(), parsed)) {
+    lastError_ = "unexpected crypto response";
+    return false;
+  }
+  parsed.fetchedEpoch = epochNow();
+  out = parsed;
+  return true;
+}
+
+bool WeatherClient::fetchGeocode(const char* city, GeoLocation& out) {
+  lastError_ = "";
+  if (WiFi.status() != WL_CONNECTED) {
+    lastError_ = "WiFi not connected";
+    return false;
+  }
+
+  String url = "https://geocoding-api.open-meteo.com/v1/search?count=1&format=json&name=";
+  url += urlEncode(city);
+
+  String payload;
+  if (!httpGet(url, payload)) return false;
+
+  GeoLocation parsed;
+  if (!parseGeocode(payload.c_str(), payload.length(), parsed)) {
+    lastError_ = "city not found";
     return false;
   }
   out = parsed;

@@ -25,12 +25,20 @@
 #endif
 
 // --- Location --------------------------------------------------------------
-// Right-click the spot in any map app to get latitude/longitude.
-// 武汉市中心（Wuhan）。中文字符会自动被 tools/gen_fonts.py 扫描并烘进位图
-// （include/ 目录在扫描范围内），所以地名可以直接写中文。
+// Just a city name: WEATHER_CITY is resolved through Open-Meteo's geocoding API
+// on the first boot and the coordinates are cached in RTC memory, so it costs
+// one request once (and again only if geocoding failed or the name changed).
+// It accepts UTF-8, so 武汉 / 東京 / Zürich all work.
+#ifndef WEATHER_CITY
+#define WEATHER_CITY "Wuhan"
+#endif
+
+// Header label. Leave it empty ("") to use the name geocoding returns.
 #ifndef WEATHER_PLACE
 #define WEATHER_PLACE "武汉"
 #endif
+
+// Fallback coordinates, used when WEATHER_CITY is empty or geocoding fails.
 #ifndef WEATHER_LATITUDE
 #define WEATHER_LATITUDE 30.5928f
 #endif

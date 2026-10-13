@@ -6,6 +6,30 @@
 
 namespace weather {
 
+// Crypto page table: symbol, Chinese name, CoinGecko id. Keep the order — it is
+// the display order, and kCoinCount sizes the quote array.
+namespace {
+const CoinInfo kCoins[kCoinCount] = {
+    {"BTC", "比特币", "bitcoin"},
+    {"ETH", "以太坊", "ethereum"},
+    {"XRP", "瑞波币", "ripple"},
+    {"BNB", "币安币", "binancecoin"},
+    {"SOL", "Solana", "solana"},
+    {"TRX", "波场", "tron"},
+    {"XMR", "门罗币", "monero"},
+};
+}  // namespace
+
+const CoinInfo& coinInfo(uint8_t index) { return kCoins[index < kCoinCount ? index : 0]; }
+
+int coinIndexForApiId(const char* apiId) {
+  if (apiId == nullptr) return -1;
+  for (uint8_t i = 0; i < kCoinCount; ++i) {
+    if (strcmp(kCoins[i].apiId, apiId) == 0) return static_cast<int>(i);
+  }
+  return -1;
+}
+
 // WMO 4677 weather codes as used by Open-Meteo's `weather_code`.
 const char* conditionText(uint8_t code) {
   switch (code) {
@@ -182,6 +206,47 @@ const char* formatWhole(float value, char* out, size_t outLen) {
   const bool negative = value < -0.5f;
   const float magnitude = negative ? -value : value;
   snprintf(out, outLen, negative ? "-%d" : "%d", static_cast<int>(magnitude + 0.5f));
+  return out;
+}
+
+const char* formatUsd(float usd, char* out, size_t outLen) {
+  if (out == nullptr || outLen == 0) return out;
+  const bool negative = usd < -0.00005f;
+  const float magnitude = negative ? -usd : usd;
+  const uint8_t decimals = magnitude >= 10000.0f ? 0 : (magnitude >= 1.0f ? 2 : 4);
+  const uint32_t scale = decimals == 0 ? 1u : (decimals == 2 ? 100u : 10000u);
+  const uint32_t scaled = static_cast<uint32_t>(magnitude * static_cast<float>(scale) + 0.5f);
+  const uint32_t whole = scaled / scale;
+  const uint32_t fraction = scaled % scale;
+
+  char digits[16];
+  snprintf(digits, sizeof(digits), "%lu", static_cast<unsigned long>(whole));
+  char grouped[24];
+  const size_t length = strlen(digits);
+  size_t written = 0;
+  for (size_t i = 0; i < length; ++i) {
+    if (i > 0 && ((length - i) % 3) == 0) grouped[written++] = ',';
+    grouped[written++] = digits[i];
+  }
+  grouped[written] = '\0';
+
+  const char* sign = negative ? "-" : "";
+  if (decimals == 0) {
+    snprintf(out, outLen, "%s$%s", sign, grouped);
+  } else if (decimals == 2) {
+    snprintf(out, outLen, "%s$%s.%02lu", sign, grouped, static_cast<unsigned long>(fraction));
+  } else {
+    snprintf(out, outLen, "%s$%s.%04lu", sign, grouped, static_cast<unsigned long>(fraction));
+  }
+  return out;
+}
+
+const char* formatPercent(float percent, char* out, size_t outLen) {
+  if (out == nullptr || outLen == 0) return out;
+  const bool negative = percent < -0.05f;
+  const float magnitude = negative ? -percent : percent;
+  const int scaled = static_cast<int>(magnitude * 10.0f + 0.5f);
+  snprintf(out, outLen, "%s%d.%d%%", negative ? "-" : "+", scaled / 10, scaled % 10);
   return out;
 }
 
