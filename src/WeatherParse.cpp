@@ -10,9 +10,10 @@ namespace {
 
 constexpr uint8_t kMaxKeyLength = 31;
 
-// The API sends 168 hourly points per coin; buffer them (int16 relative steps)
-// and downsample on commit.
-constexpr uint16_t kSparklineRawMax = 200;
+// One CoinCodex series response holds 41 points for a 7-day window at 4 samples
+// a day; buffer them as floats and convert to the stored relative form on
+// commit.
+constexpr uint16_t kSeriesPointMax = 64;
 
 struct ParseContext {
   enum class Section : uint8_t { None, Current, Hourly, Daily };
@@ -23,20 +24,6 @@ struct ParseContext {
   AirQuality* air = nullptr;      // air target
   CryptoBoard* crypto = nullptr;  // crypto target
   GeoLocation* geo = nullptr;     // geocoding target
-  uint8_t coinValid = 0;          // coins with a price in this response
-  // Crypto: the markets response is an array of coin objects, each with a
-  // nested sparkline object, so the coin is identified by its "id" field and
-  // committed when its object closes (field order independent).
-  uint8_t cryptoDepth = 0;
-  bool inSparkline = false;
-  CoinQuote staging;              // usd / change24h of the coin being read
-  char coinId[24] = {0};
-  bool sawPrice = false;
-  int16_t rawSpark[kSparklineRawMax] = {0};
-  uint16_t rawCount = 0;
-  float rawFirst = 0.0f;
-  bool geoResultTaken = false;    // first geocoding result already consumed
-  bool geoHasCoords = false;
   Section section = Section::None;
   char key[kMaxKeyLength + 1] = {0};
   char arrayKey[kMaxKeyLength + 1] = {0};
@@ -44,6 +31,21 @@ struct ParseContext {
   uint8_t index = 0;     // element index inside the current array
   uint8_t dayCount = 0;  // daily.time entries seen
   bool sawCurrent = false;
+
+  // Crypto: {"BTC":[[ts, price, volume, market cap], ...], ...} — the key names
+  // the coin, the outer array is the series, each inner array is one sample.
+  int pendingCoin = -1;    // coin whose series is about to start
+  uint8_t seriesCoin = 0;  // coin being collected
+  bool inSeries = false;
+  bool inCandle = false;
+  uint8_t candleField = 0;
+  float seriesPrice[kSeriesPointMax] = {0};
+  uint16_t seriesCount = 0;
+  uint8_t seriesCommitted = 0;
+
+  // Geocoding: only the first entry of `results` is wanted.
+  bool geoResultTaken = false;
+  bool geoHasCoords = false;
 };
 
 bool keyIs(const char* key, const char* expected) { return std::strcmp(key, expected) == 0; }
@@ -54,35 +56,33 @@ void copyKey(char* destination, const char* source, size_t length) {
   destination[n] = '\0';
 }
 
+void copyText(const char* value, size_t len, char* destination, size_t capacity) {
+  const size_t n = len < capacity - 1 ? len : capacity - 1;
+  std::memcpy(destination, value, n);
+  destination[n] = '\0';
+}
+
 // --- StreamingJsonParser callbacks -----------------------------------------
 
 void onKey(void* ctx, const char* key, size_t len) {
-  copyKey(static_cast<ParseContext*>(ctx)->key, key, len);
+  ParseContext& p = *static_cast<ParseContext*>(ctx);
+  copyKey(p.key, key, len);
+  if (p.target == ParseContext::Target::Crypto) {
+    p.pendingCoin = coinIndexForApiId(p.key);  // -1 for anything that is not a coin
+  }
 }
 
 void onObjectStart(void* ctx) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
 
   if (p.target == ParseContext::Target::Crypto) {
-    ++p.cryptoDepth;
-    if (p.cryptoDepth == 1) {
-      p.staging = CoinQuote{};
-      p.coinId[0] = '\0';
-      p.sawPrice = false;
-      p.inSparkline = false;
-      p.rawCount = 0;
-      p.rawFirst = 0.0f;
-    } else if (p.cryptoDepth == 2 && keyIs(p.key, "sparkline_in_7d")) {
-      p.inSparkline = true;
-    }
-    p.section = ParseContext::Section::None;
+    p.section = ParseContext::Section::None;  // the series carries no objects
     return;
   }
 
   if (p.target == ParseContext::Target::Geo) {
-    // Only the first element of `results` is interesting.
     p.section = (p.inArray && !p.geoResultTaken) ? ParseContext::Section::Current
-                                                : ParseContext::Section::None;
+                                                 : ParseContext::Section::None;
     return;
   }
 
@@ -99,48 +99,49 @@ void onObjectStart(void* ctx) {
   }
 }
 
-// Downsample the buffered week and store the coin under its table index.
-void commitCoin(ParseContext& p) {
-  const int index = coinIndexForApiId(p.coinId);
-  if (index < 0 || !p.sawPrice) return;
+// Turns the buffered series into a CoinQuote: the last point is the price, four
+// samples back is 24 h ago, and the whole series becomes the sparkline (stored
+// in 0.01% steps relative to its first point, so the RTC cache stays small and
+// scale-free).
+void commitSeries(ParseContext& p) {
+  if (p.seriesCount < 2 || p.crypto == nullptr) return;
 
-  CoinQuote quote;
-  quote.usd = p.staging.usd;
-  quote.change24h = p.staging.change24h;
+  const float reference = p.seriesPrice[0];
+  if (!(reference > 0.0f)) return;
+
+  CoinQuote& quote = p.crypto->coins[p.seriesCoin];
+  quote = CoinQuote{};
+  quote.usd = p.seriesPrice[p.seriesCount - 1];
+  quote.change24h =
+      p.seriesCount >= 5 ? (quote.usd / p.seriesPrice[p.seriesCount - 5] - 1.0f) * 100.0f : 0.0f;
+  quote.sparkRef = reference;
   quote.valid = true;
-  if (p.rawCount >= 2 && p.rawFirst > 0.0f) {
-    int16_t low = p.rawSpark[0];
-    int16_t high = p.rawSpark[0];
-    for (uint16_t i = 1; i < p.rawCount; ++i) {
-      if (p.rawSpark[i] < low) low = p.rawSpark[i];
-      if (p.rawSpark[i] > high) high = p.rawSpark[i];
-    }
-    quote.sparkCount = kSparklinePoints;
-    quote.sparkRef = p.rawFirst;
-    quote.sparkMin = low;
-    quote.sparkMax = high;
-    for (uint8_t i = 0; i < kSparklinePoints; ++i) {
-      const uint32_t source = static_cast<uint32_t>(i) * (p.rawCount - 1) / (kSparklinePoints - 1);
-      quote.spark[i] = p.rawSpark[source];
-    }
+
+  // 41 points for a 7-day window fits kSparklinePoints; longer responses are
+  // downsampled.
+  const bool fits = p.seriesCount <= kSparklinePoints;
+  const uint16_t stored = fits ? p.seriesCount : kSparklinePoints;
+  int16_t low = 0;
+  int16_t high = 0;
+  for (uint16_t i = 0; i < stored; ++i) {
+    const uint32_t source =
+        fits ? i : static_cast<uint32_t>(i) * (p.seriesCount - 1) / (kSparklinePoints - 1);
+    float relative = (p.seriesPrice[source] / reference - 1.0f) * 10000.0f;
+    if (relative > 32000.0f) relative = 32000.0f;
+    if (relative < -32000.0f) relative = -32000.0f;
+    const int16_t value = static_cast<int16_t>(relative);
+    quote.spark[i] = value;
+    if (i == 0 || value < low) low = value;
+    if (i == 0 || value > high) high = value;
   }
-  p.crypto->coins[index] = quote;
-  ++p.coinValid;
+  quote.sparkCount = static_cast<uint8_t>(stored);
+  quote.sparkMin = low;
+  quote.sparkMax = high;
+  ++p.seriesCommitted;
 }
 
 void onObjectEnd(void* ctx) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
-
-  if (p.target == ParseContext::Target::Crypto) {
-    if (p.cryptoDepth == 0) return;
-    --p.cryptoDepth;
-    if (p.cryptoDepth == 0) {
-      commitCoin(p);  // the coin object closed
-    } else if (p.cryptoDepth == 1) {
-      p.inSparkline = false;  // leaving sparkline_in_7d
-    }
-    return;
-  }
 
   if (p.target == ParseContext::Target::Geo && p.section == ParseContext::Section::Current) {
     p.geoResultTaken = true;  // ignore any further results
@@ -153,18 +154,24 @@ void onObjectEnd(void* ctx) {
 void onArrayStart(void* ctx) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
 
+  if (p.target == ParseContext::Target::Crypto) {
+    if (!p.inSeries && p.pendingCoin >= 0) {
+      p.inSeries = true;
+      p.inCandle = false;
+      p.seriesCoin = static_cast<uint8_t>(p.pendingCoin);
+      p.pendingCoin = -1;
+      p.seriesCount = 0;
+    } else if (p.inSeries) {
+      p.inCandle = true;  // one [ts, price, volume, market cap] sample
+      p.candleField = 0;
+    }
+    return;
+  }
+
   if (p.target == ParseContext::Target::Geo) {
     // `results` is the geocoding array; its first object is the city we want.
     p.inArray = keyIs(p.key, "results");
     p.index = 0;
-    return;
-  }
-  if (p.target == ParseContext::Target::Crypto) {
-    if (p.cryptoDepth == 2 && keyIs(p.key, "price")) {
-      p.inSparkline = true;
-      p.rawCount = 0;
-      p.rawFirst = 0.0f;
-    }
     return;
   }
   if (p.target != ParseContext::Target::Weather) return;
@@ -175,7 +182,30 @@ void onArrayStart(void* ctx) {
   copyKey(p.arrayKey, p.key, std::strlen(p.key));
 }
 
-void onArrayEnd(void* ctx) { static_cast<ParseContext*>(ctx)->inArray = false; }
+void onArrayEnd(void* ctx) {
+  ParseContext& p = *static_cast<ParseContext*>(ctx);
+
+  if (p.target == ParseContext::Target::Crypto) {
+    if (p.inCandle) {
+      p.inCandle = false;
+    } else if (p.inSeries) {
+      commitSeries(p);
+      p.inSeries = false;
+    }
+    return;
+  }
+  p.inArray = false;
+}
+
+void onBool(void* ctx, bool value) {
+  ParseContext& p = *static_cast<ParseContext*>(ctx);
+  if (p.target != ParseContext::Target::Weather) return;
+  if (p.section == ParseContext::Section::Current && keyIs(p.key, "is_day")) {
+    p.out->current.isDay = value;
+  }
+}
+
+void onNull(void*) {}
 
 // Consumes one element of the daily arrays we track.
 void handleDailyNumber(ParseContext& p, float number) {
@@ -221,27 +251,11 @@ void onNumber(void* ctx, const char* value, size_t) {
   const float number = std::strtof(value, nullptr);
 
   if (p.target == ParseContext::Target::Crypto) {
-    if (p.inSparkline) {
-      if (p.rawCount >= kSparklineRawMax) return;
-      if (p.rawCount == 0) {
-        p.rawFirst = number;
-        p.rawSpark[p.rawCount++] = 0;  // first point is the reference
-      } else if (p.rawFirst > 0.0f) {
-        float relative = (number / p.rawFirst - 1.0f) * 10000.0f;
-        if (relative > 32000.0f) relative = 32000.0f;
-        if (relative < -32000.0f) relative = -32000.0f;
-        p.rawSpark[p.rawCount++] = static_cast<int16_t>(relative);
-      }
-      return;
+    if (!p.inCandle) return;
+    if (p.candleField == 1) {
+      if (p.seriesCount < kSeriesPointMax) p.seriesPrice[p.seriesCount++] = number;
     }
-    if (p.cryptoDepth == 1) {
-      if (keyIs(p.key, "current_price")) {
-        p.staging.usd = number;
-        p.sawPrice = true;
-      } else if (keyIs(p.key, "price_change_percentage_24h")) {
-        p.staging.change24h = number;
-      }
-    }
+    ++p.candleField;  // 0 = timestamp, 1 = price, then volume / market cap
     return;
   }
 
@@ -304,25 +318,14 @@ void onNumber(void* ctx, const char* value, size_t) {
   }
 }
 
-void copyTimestamp(const char* value, size_t len, char* destination, size_t capacity) {
-  const size_t n = len < capacity - 1 ? len : capacity - 1;
-  std::memcpy(destination, value, n);
-  destination[n] = '\0';
-}
-
 void onString(void* ctx, const char* value, size_t len) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
 
+  if (p.target == ParseContext::Target::Crypto) return;  // the series is all numbers
+
   if (p.target == ParseContext::Target::Air) {
     if (p.section == ParseContext::Section::Current && keyIs(p.key, "time")) {
-      copyTimestamp(value, len, p.air->time, sizeof(p.air->time));
-    }
-    return;
-  }
-
-  if (p.target == ParseContext::Target::Crypto) {
-    if (p.cryptoDepth == 1 && keyIs(p.key, "id")) {
-      copyTimestamp(value, len, p.coinId, sizeof(p.coinId));
+      copyText(value, len, p.air->time, sizeof(p.air->time));
     }
     return;
   }
@@ -330,17 +333,17 @@ void onString(void* ctx, const char* value, size_t len) {
   if (p.target == ParseContext::Target::Geo) {
     if (p.section != ParseContext::Section::Current) return;
     if (keyIs(p.key, "name")) {
-      copyTimestamp(value, len, p.geo->name, sizeof(p.geo->name));
+      copyText(value, len, p.geo->name, sizeof(p.geo->name));
     } else if (keyIs(p.key, "country")) {
-      copyTimestamp(value, len, p.geo->country, sizeof(p.geo->country));
+      copyText(value, len, p.geo->country, sizeof(p.geo->country));
     } else if (keyIs(p.key, "timezone")) {
-      copyTimestamp(value, len, p.geo->timezone, sizeof(p.geo->timezone));
+      copyText(value, len, p.geo->timezone, sizeof(p.geo->timezone));
     }
     return;
   }
 
   if (p.section == ParseContext::Section::Current) {
-    if (keyIs(p.key, "time")) copyTimestamp(value, len, p.out->current.time, sizeof(p.out->current.time));
+    if (keyIs(p.key, "time")) copyText(value, len, p.out->current.time, sizeof(p.out->current.time));
     return;
   }
 
@@ -348,7 +351,7 @@ void onString(void* ctx, const char* value, size_t len) {
   if (p.section == ParseContext::Section::Daily) {
     if (p.index < kForecastDays) {
       DailyForecast& day = p.out->days[p.index];
-      copyTimestamp(value, len, day.date, sizeof(day.date));
+      copyText(value, len, day.date, sizeof(day.date));
       day.valid = len >= 10;
     }
     ++p.index;
@@ -356,24 +359,13 @@ void onString(void* ctx, const char* value, size_t len) {
   } else if (p.section == ParseContext::Section::Hourly) {
     if (p.index < kForecastHours) {
       HourlyForecast& hour = p.out->hours[p.index];
-      copyTimestamp(value, len, hour.time, sizeof(hour.time));
+      copyText(value, len, hour.time, sizeof(hour.time));
       hour.valid = len >= 13;
     }
     ++p.index;
     if (p.index > p.out->hourCount) p.out->hourCount = p.index;
   }
 }
-
-void onBool(void* ctx, bool value) {
-  ParseContext& p = *static_cast<ParseContext*>(ctx);
-  if (p.target != ParseContext::Target::Weather) return;
-  if (p.section == ParseContext::Section::Current &&
-      keyIs(p.key, "is_day")) {
-    p.out->current.isDay = value;
-  }
-}
-
-void onNull(void*) {}
 
 JsonCallbacks makeCallbacks(ParseContext& ctx) {
   JsonCallbacks callbacks{};
@@ -413,38 +405,48 @@ bool parseForecast(const char* json, size_t length, WeatherReport& out) {
   return true;
 }
 
-struct CryptoStreamParser::Impl {
+bool parseAirQuality(const char* json, size_t length, AirQuality& out) {
+  if (json == nullptr || length == 0) return false;
+
+  AirQuality parsed;
   ParseContext ctx;
-  StreamingJsonParser parser;
+  ctx.target = ParseContext::Target::Air;
+  ctx.air = &parsed;
 
-  explicit Impl(CryptoBoard& board) : parser(makeCallbacks(ctx)) {
-    ctx.target = ParseContext::Target::Crypto;
-    ctx.crypto = &board;
-  }
-};
+  StreamingJsonParser parser(makeCallbacks(ctx));
+  parser.feed(json, length);
 
-CryptoStreamParser::CryptoStreamParser(CryptoBoard& board) : impl_(new Impl(board)) {}
+  if (parser.hasError() || !ctx.sawCurrent) return false;
 
-CryptoStreamParser::~CryptoStreamParser() { delete impl_; }
-
-void CryptoStreamParser::feed(const char* data, size_t length) {
-  if (data == nullptr || length == 0) return;
-  impl_->parser.feed(data, length);
+  parsed.valid = true;
+  out = parsed;
+  return true;
 }
 
-bool CryptoStreamParser::finish() const {
-  // A couple of missing ids is survivable (the row renders as "--"); half of
-  // them means the response shape changed and the page would be misleading.
-  return !impl_->parser.hasError() && impl_->ctx.coinValid * 2 >= kCoinCount;
+bool parseCoinSeries(const char* json, size_t length, CryptoBoard& out) {
+  if (json == nullptr || length == 0) return false;
+
+  ParseContext ctx;
+  ctx.target = ParseContext::Target::Crypto;
+  ctx.crypto = &out;
+
+  StreamingJsonParser parser(makeCallbacks(ctx));
+  parser.feed(json, length);
+
+  return !parser.hasError() && ctx.seriesCommitted > 0;
 }
 
 bool parseCrypto(const char* json, size_t length, CryptoBoard& out) {
-  if (json == nullptr || length == 0) return false;
-
   CryptoBoard parsed;
-  CryptoStreamParser sink(parsed);
-  sink.feed(json, length);
-  if (!sink.finish()) return false;
+  if (!parseCoinSeries(json, length, parsed)) return false;
+
+  uint8_t valid = 0;
+  for (uint8_t i = 0; i < kCoinCount; ++i) {
+    if (parsed.coins[i].valid) ++valid;
+  }
+  // A couple of missing symbols is survivable (the row renders as "--"); half of
+  // them means the response shape changed and the page would be misleading.
+  if (valid * 2 < kCoinCount) return false;
 
   parsed.ok = true;
   out = parsed;
@@ -463,24 +465,6 @@ bool parseGeocode(const char* json, size_t length, GeoLocation& out) {
   parser.feed(json, length);
 
   if (parser.hasError() || !ctx.geoResultTaken || !ctx.geoHasCoords) return false;
-
-  parsed.valid = true;
-  out = parsed;
-  return true;
-}
-
-bool parseAirQuality(const char* json, size_t length, AirQuality& out) {
-  if (json == nullptr || length == 0) return false;
-
-  AirQuality parsed;
-  ParseContext ctx;
-  ctx.target = ParseContext::Target::Air;
-  ctx.air = &parsed;
-
-  StreamingJsonParser parser(makeCallbacks(ctx));
-  parser.feed(json, length);
-
-  if (parser.hasError() || !ctx.sawCurrent) return false;
 
   parsed.valid = true;
   out = parsed;

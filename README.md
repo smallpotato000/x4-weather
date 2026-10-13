@@ -69,30 +69,19 @@
 
 ![行情·涨幅榜](docs/preview-crypto-gainers.png)
 
-- 价格带千分位、小数位自适应；▲▼ 表示 24 小时方向；虚线是 7 天前的开盘价（基准线）；
-- 数据来自 CoinGecko `coins/markets`（一个请求同时拿价格、24 小时涨跌和 168 点 7 天走势），
-  和空气质量一样**只在翻到该页时才请求**；
-- 这个响应约 28 KB，所以固件是**边收边解析**（512 字节一块直接喂给 SAX 解析器，不整包进 RAM），
-  168 点走势下采样成 48 点存进 RTC（相对首点的百分比，int16）；
+- 价格带千分位、小数位自适应；▲▼ 表示 24 小时方向；折线框里的虚线是 7 天前的开盘价（基准线）；
+- 数据来自 **CoinCodex** `get_coin_history`：**一个币一个请求**（7 个请求，每个约 2.7 KB），
+  一次拿到「7 天价格序列 + 最新价 + 24 小时变化」，7 个币（含 XMR）都能取到；
+  和空气质量一样**只在翻到该页时才请求**，7 个请求复用同一条 TLS 连接；
+- 序列在提交时转成「相对首点的 0.01%」存进 RTC（int16，41 点），画图与 min/max 都用它；
 - 想换币种或数据源：改 `src/WeatherData.cpp` 的 `kCoins` 表（符号/中文名/数据源 id）与
   `WeatherClient::fetchCrypto()` 的 URL，解析器不用动。
 
-### 为什么“切页”只发生在设备醒着的时候
-
-C3 X4 的六个导航键挂在 **ADC 电阻梯**上（GPIO1/GPIO2 各一组），按下时是分压电压而不是干净的低电平，
-所以它们**不能作为深睡唤醒源**——只有电源键（GPIO3）能唤醒。于是交互被设计成一段时间窗：
-
-1. 按一下**电源键** → 醒来（GPIO 唤醒）→ 联网取数、刷新，然后**保持醒着 25 秒**（`WEATHER_INTERACTIVE_SECONDS`）；
-2. 这 25 秒里左右键翻页（翻页用 `FAST_REFRESH` 局部刷新，很快）、确认键重新取数；
-3. 25 秒无操作（或按返回键）→ 整屏 `FULL_REFRESH` 留一张干净画面 → 回到深睡。
-
-两个细节：
-
-- **页面会被记住**（存在 RTC memory 里）：下一轮 30 分钟的自动刷新直接画你最后看的那一页，不会跳回第一页。
-- **定时唤醒不会为按键白耗电**：那 30 分钟一次的自动画面上，设备只多等 1.2 秒看有没有人按键，没人按就睡。
-- 空气质量页与行情页各用**自己的接口**，都只在需要显示时才请求（省 TLS 握手与流量）：会话里第一次翻到该页时抓一次。
-- **城市名定位**：`WEATHER_CITY` 只写城市名（中英文都行，UTF-8），首次开机通过 geocoding 解析成坐标并**存在 RTC memory**，
-  之后不再请求；解析失败就退回 `WEATHER_LATITUDE/LONGITUDE` 兜底。
+> **为什么不用 CoinGecko？** 它需要 28 KB 的 `coins/markets` 才带走势，而且更重要的是
+> **网络可达性**：开发这台机器走代理（`127.0.0.1:3067`，TUN 模式），而 ESP32-C3 没有代理——
+> 裸连测试里 CoinGecko / OKX / MEXC / HTX / Kraken / CoinCap 全部超时，
+> 只有 Binance Vision、Gate.io、CoinLore、CoinCodex 能通。所以要换源时，
+> **先在这台机器的终端用 `curl --noproxy '*'` 试一下**（不加 `--noproxy` 就是在测代理，不代表设备能通）。
 
 ## 3. 真机实测与功耗
 
@@ -143,7 +132,7 @@ cycle period ≈ 68.6 s = 60 s 深睡 + 8.6 s 活跃
 刷新间隔和电池容量。想更省就加大 `WEATHER_REFRESH_MINUTES`。
 
 交互会话是唯一"按需多花电"的地方：25 秒会话本身约 0.7 mAh（WiFi 保持连着，好让确认键/空气质量/行情即点即取；
-行情那 28 KB 大约多花 1–2 s），
+行情那 7 个请求大约多花 2–3 s），
 折合每天用 10 次也才 ~7 mAh。把 `WEATHER_INTERACTIVE_SECONDS` 调小或设 0 就能省掉。
 
 ### 调试深睡设备的两个坑（都踩过了）
@@ -291,15 +280,17 @@ https://air-quality-api.open-meteo.com/v1/air-quality
   &current=european_aqi,pm2_5,pm10,nitrogen_dioxide,ozone&timezone=auto
 ```
 
-行情（按需，翻到该页才请求；响应约 28 KB，流式解析）：
+行情（按需，翻到该页才请求；每个币一个约 2.7 KB 的请求）：
 
 ```
-https://api.coingecko.com/api/v3/coins/markets
-  ?vs_currency=usd&price_change_percentage=24h&sparkline=true
-  &ids=bitcoin,ethereum,ripple,binancecoin,solana,tron,monero
-  → [{"id":"bitcoin","current_price":83342,"price_change_percentage_24h":-0.76,
-      "sparkline_in_7d":{"price":[85500.26, ...168 点...]}}, ...]
+https://coincodex.com/api/coincodex/get_coin_history/{BTC|ETH|XRP|BNB|SOL|TRX|XMR}
+  /<今天-6天>/<今天>/4          # 最后一段 = 每天采样点数（4 → 7 天 41 点）
+  → {"BTC":[[1791273600,86034.07,28788186560.7,1728774806025.6], ...]}
+                 ↑时间戳    ↑价格
 ```
+
+最后一点是最新价，往回第 5 个点就是 24 小时前（每天 4 个点），整条序列直接当 7 天走势用。
+日期范围由设备时钟（SNTP）算出——所以行情页比其它页多一个前提：**时钟已同步**。
 
 - `timezone=auto`：日预报的日期和 `current.time` 都是**当地时间**，固件只做格式化。
 - 时间来自 SNTP（`configTzTime`，时区字符串见 `WEATHER_TIMEZONE`，默认 `"CST-8"`），
@@ -400,9 +391,9 @@ PREVIEW_PYTHON=/path/to/python sh tools/test_host.sh
 1. **解析测试**：`tools/preview/test_parse.cpp` 用真实的 Open-Meteo 响应
    （`tools/preview/sample_response.json`，固件请求的那条 URL 对武汉的真实返回快照）驱动
    `weather::parseForecast()`——固件里跑的就是同一份 `src/WeatherParse.cpp`。
-   覆盖：实况字段、三天下限/上限、逐小时 12 条、空气质量、行情（价格/涨跌/7 天走势、
-   **分块流式喂数据**与一次性解析结果一致）、geocoding、价格与涨跌格式化，
-   以及截断/缺 `current`/空载荷/只回一半币种等坏载荷被拒绝且**不污染上一次数据**。
+   覆盖：实况字段、三天下限/上限、逐小时 12 条、空气质量、行情（7 天序列 → 最新价/24 小时变化/
+   走势点数与极值、**单币响应只填该币不动其它币**）、geocoding、价格与涨跌格式化，
+   以及截断/缺 `current`/空载荷/只回一半币种/零价格序列等坏载荷被拒绝且**不污染上一次数据**。
 2. **渲染预览**：编译**和固件完全相同**的 `WeatherUi.cpp` + `CjkGlyphSource.cpp` +
    FreeInkUI 的 `DisplayTarget`，往模拟的 800×480 framebuffer 上画。`ok` 这一档会把
    录制下来的响应**过一遍同一个解析器**再渲染，所以预览图上的数字（28.4 °C / 少云 /
@@ -452,6 +443,7 @@ sh tools/preview/render.sh ok /tmp/other.json /tmp/air.json   # 换数据源渲�
 | 深睡后不自动醒 | 看串口有没有 `deep sleep N min` 日志；确认电量，以及 `WEATHER_REFRESH_MINUTES` 不为 0 |
 | 设备频繁自己醒来 | 多半是按键悬空/干扰，把 `WEATHER_WAKE_ON_BUTTON` 设为 `0` |
 | 唤醒后还是旧数据 | 底栏会写“获取失败 …，显示上次数据”；检查网络，5 分钟后自动重试 |
+| 行情页写“行情获取失败” | 三个常见原因：① 时钟没同步（CoinCodex 要日期范围，看日志里 `clock --:--`）；② 你的网络要代理才能访问境外行情站，而设备**没有代理**——用 `curl --noproxy '*' <URL>` 在电脑上验一下；③ 数据源挂了，换 `kCoins` 表与 `fetchCrypto()` 的 URL |
 | 编译报找不到 `../freeink-sdk` | 改 `platformio.ini` 里 5 个 `symlink://` 路径指向你的 SDK checkout |
 
 ## 15. 许可与致谢

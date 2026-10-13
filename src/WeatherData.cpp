@@ -6,17 +6,18 @@
 
 namespace weather {
 
-// Crypto page table: symbol, Chinese name, CoinGecko id. Keep the order — it is
-// the display order, and kCoinCount sizes the quote array.
+// Crypto page table: symbol, Chinese name, data-source id (CoinCodex uses the
+// plain symbol). Keep the order — it is the display order, and kCoinCount sizes
+// the quote array.
 namespace {
 const CoinInfo kCoins[kCoinCount] = {
-    {"BTC", "比特币", "bitcoin"},
-    {"ETH", "以太坊", "ethereum"},
-    {"XRP", "瑞波币", "ripple"},
-    {"BNB", "币安币", "binancecoin"},
-    {"SOL", "Solana", "solana"},
-    {"TRX", "波场", "tron"},
-    {"XMR", "门罗币", "monero"},
+    {"BTC", "比特币", "BTC"},
+    {"ETH", "以太坊", "ETH"},
+    {"XRP", "瑞波币", "XRP"},
+    {"BNB", "币安币", "BNB"},
+    {"SOL", "Solana", "SOL"},
+    {"TRX", "波场", "TRX"},
+    {"XMR", "门罗币", "XMR"},
 };
 }  // namespace
 

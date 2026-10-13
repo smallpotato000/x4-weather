@@ -180,14 +180,23 @@ bool WeatherClient::fetchCrypto(CryptoBoard& out) {
     return false;
   }
 
-  // markets (not simple/price) because it carries the 7-day sparkline in the
-  // same response; it is ~28 KB, so it is streamed rather than buffered.
-  String url = "https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&sparkline=true"
-               "&price_change_percentage=24h&ids=";
-  for (uint8_t i = 0; i < kCoinCount; ++i) {
-    if (i > 0) url += ',';
-    url += coinInfo(i).apiId;
+  // CoinCodex wants an explicit date range, so the crypto page needs the SNTP
+  // clock (everything else works without it).
+  const uint32_t now = epochNow();
+  if (now == 0) {
+    lastError_ = "clock not set";
+    return false;
   }
+  const time_t nowSeconds = static_cast<time_t>(now);
+  struct tm today;
+  localtime_r(&nowSeconds, &today);
+  struct tm weekAgo = today;
+  weekAgo.tm_mday -= 6;
+  mktime(&weekAgo);  // normalises the day underflow
+  char start[11];
+  char end[11];
+  strftime(start, sizeof(start), "%Y-%m-%d", &weekAgo);
+  strftime(end, sizeof(end), "%Y-%m-%d", &today);
 
   WiFiClientSecure secure;
   secure.setInsecure();
@@ -195,49 +204,41 @@ bool WeatherClient::fetchCrypto(CryptoBoard& out) {
   HTTPClient http;
   http.setConnectTimeout(config_.httpTimeoutMs);
   http.setTimeout(config_.httpTimeoutMs);
+  http.setReuse(true);  // same host for all seven requests: keep the TLS session
+  http.setUserAgent("x4-weather/1.0");
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  if (!http.begin(secure, url)) {
-    lastError_ = "http.begin failed";
-    return false;
-  }
-  const int status = http.GET();
-  if (status != HTTP_CODE_OK) {
-    lastError_ = status > 0 ? "HTTP error" : "HTTP connection failed";
-    http.end();
-    return false;
-  }
 
-  CryptoBoard parsed;
-  CryptoStreamParser sink(parsed);
-  WiFiClient* stream = http.getStreamPtr();
-  const int total = http.getSize();
-  uint8_t buffer[512];
-  size_t received = 0;
-  uint32_t lastDataMs = millis();
-  while (true) {
-    if (total > 0 && received >= static_cast<size_t>(total)) break;
-    const size_t available = stream->available();
-    if (available == 0) {
-      if (!http.connected() && (total <= 0 || received >= static_cast<size_t>(total))) break;
-      if (millis() - lastDataMs > 5000) break;  // stalled
-      delay(5);
-      continue;
+  CryptoBoard board;
+  uint8_t fetched = 0;
+  for (uint8_t i = 0; i < kCoinCount; ++i) {
+    String url = "https://coincodex.com/api/coincodex/get_coin_history/";
+    url += coinInfo(i).apiId;
+    url += '/';
+    url += start;
+    url += '/';
+    url += end;
+    url += "/4";
+
+    if (!http.begin(secure, url)) {
+      http.end();
+      lastError_ = "http.begin failed";
+      break;
     }
-    const size_t chunk = available < sizeof(buffer) ? available : sizeof(buffer);
-    const int read = stream->readBytes(buffer, chunk);
-    if (read <= 0) break;
-    sink.feed(reinterpret_cast<const char*>(buffer), static_cast<size_t>(read));
-    received += static_cast<size_t>(read);
-    lastDataMs = millis();
+    const int status = http.GET();
+    if (status == HTTP_CODE_OK) {
+      const String payload = http.getString();
+      if (parseCoinSeries(payload.c_str(), payload.length(), board)) ++fetched;
+    }
+    http.end();
   }
-  http.end();
 
-  if (!sink.finish()) {
+  if (fetched * 2 < kCoinCount) {
     lastError_ = "unexpected crypto response";
     return false;
   }
-  parsed.fetchedEpoch = epochNow();
-  out = parsed;
+  board.ok = true;
+  board.fetchedEpoch = epochNow();
+  out = board;
   return true;
 }
 

@@ -23,30 +23,20 @@ bool parseForecast(const char* json, size_t length, WeatherReport& out);
 // `out` is left untouched.
 bool parseAirQuality(const char* json, size_t length, AirQuality& out);
 
-// Parses a CoinGecko /api/v3/coins/markets response (an array of coin objects
-// with current_price, price_change_percentage_24h and a 168-point
-// sparkline_in_7d.price) into the coin table. Sparklines are downsampled to
-// kSparklinePoints. Coins the response omits stay invalid; fewer than half the
-// table present is treated as a failure.
+// Parses a CoinCodex /api/coincodex/get_coin_history response — an object keyed
+// by symbol whose values are [timestamp, price, volume, market cap] series:
+//
+//   {"BTC":[[1791273600,86034.07,...],[...]], "ETH":[...], ...}
+//
+// The last point is the current price, the 24 h change comes from the point four
+// samples back (four samples a day) and the series becomes the sparkline. The
+// live firmware gets one such response per coin, so keys the table does not know
+// are ignored and `out` is not cleared: only the coins present are updated.
+bool parseCoinSeries(const char* json, size_t length, CryptoBoard& out);
+
+// Same, but for a whole board: starts from an empty board and requires at least
+// half the table to be present (otherwise the page would be misleading).
 bool parseCrypto(const char* json, size_t length, CryptoBoard& out);
-
-// Incremental form of parseCrypto, so the ~28 KB markets payload can be fed to
-// the SAX parser straight off the socket instead of sitting in RAM whole.
-class CryptoStreamParser {
- public:
-  explicit CryptoStreamParser(CryptoBoard& board);
-  ~CryptoStreamParser();
-  CryptoStreamParser(const CryptoStreamParser&) = delete;
-  CryptoStreamParser& operator=(const CryptoStreamParser&) = delete;
-
-  void feed(const char* data, size_t length);
-  // True when the JSON was well formed and at least half the table arrived.
-  bool finish() const;
-
- private:
-  struct Impl;
-  Impl* impl_;
-};
 
 // Parses a geocoding-api.open-meteo.com /v1/search response's first result
 // (name, country, timezone, latitude, longitude).
