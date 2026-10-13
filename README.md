@@ -213,6 +213,9 @@ tools/verify_on_device.sh /dev/cu.usbmodem201301
 
 # E) 被动测量唤醒周期（只 stat 端口，不打开，绝不会复位芯片）
 tools/watch_sleep_cycles.py --port /dev/cu.usbmodem201301 --seconds 240
+
+# F) 只看日志不烧录：等下一次唤醒窗口，单次打开读 45 秒
+tools/watch_console.sh /dev/cu.usbmodem201301 45 3600
 ```
 
 按一下电源键（或重新插拔 USB）就能立刻唤醒设备，不用等下一次定时唤醒。
@@ -332,6 +335,7 @@ x4-weather/
 │   ├── gen_all.sh              # 一键重生成字体 + 图标
 │   ├── test_host.sh            # 主机端：解析测试 + 渲染三种界面状态
 │   ├── flash_and_watch.sh      # 设备醒着时：烧录 + 抓串口日志（单次打开，不复位芯片）
+│   ├── watch_console.sh        # 只抓日志不烧录：等唤醒窗口，单次打开读 N 秒
 │   ├── flash_when_awake.sh     # 深睡中：轮询端口，一出现就用 esptool 直烧，再抓日志
 │   ├── verify_on_device.sh     # 全流程真机验证（诊断版 → 正式版 → 被动观察）
 │   ├── watch_sleep_cycles.py   # 被动测唤醒周期：只 stat 端口，不打开串口
