@@ -17,7 +17,7 @@ TTF="${WEATHER_TTF:-tools/fonts/NotoSansSC-VF.ttf}"
 "$PY" tools/gen_fonts.py \
   --ttf "$TTF" \
   --outdir include/fonts \
-  --scan src include tools/preview \
+  --scan src include tools/preview tools/sketch \
   --extra tools/charset_extra.txt \
   --sdk "${FREEINK_SDK:-../freeink-sdk}"
 
