@@ -477,7 +477,43 @@ sh tools/preview/render.sh ok /tmp/other.json /tmp/air.json   # 换数据源渲�
 | 想让自己电脑当代理给设备用 | 现在的 ESP-IDF/Arduino TLS 栈**没有代理支持**（`esp-tls` 里没有 proxy 字段），要让设备走 HTTP CONNECT 代理得自己用 mbedTLS 手写隧道（约 150 行）；本项目的做法是**选裸连可达的数据源**，不需要代理 |
 | 编译报找不到 `../freeink-sdk` | 改 `platformio.ini` 里 5 个 `symlink://` 路径指向你的 SDK checkout |
 
-## 15. 触屏版（PaperS3）设置界面草图
+## 15. PaperS3（ESP32-S3 + 触控）移植
+
+目标机型 **M5Stack PaperS3**：ESP32-S3R8（16 MB flash / 8 MB OPI PSRAM）、
+ED047TC1 960×540 16 级灰度、8-bit 并行总线、**GT911 触控、没有任何可读按键**
+（侧键直接进 PMS150G 电源锁存芯片）。SDK 里已有 `M5PAPER_S3` 板级 profile。
+
+### 已完成的硬件校准（`[env:papers3_bringup]`）
+
+SDK 文档给 PaperS3 标了三项 "pending hardware validation"，一次烧录全部实测完毕：
+
+| 项 | 结论 | 实测数据 |
+|---|---|---|
+| 面板方向 | ✅ profile 正确 | 逻辑帧 **540×960 竖屏**（960×540 面板 + Portrait 旋转），屏幕上"上"箭头位置正确 |
+| GT911 轴映射 | ✅ profile 正确 | 点四个角 → 逻辑坐标 `(38,317)/(496,316)/(40,919)/(500,923)`，与屏幕标签位置吻合 |
+| 电池分压 | ✅ 可用 | **4178 mV → 100%**，`charging=1`（能显示"充电中"；X4 没有这个能力） |
+| 刷新耗时 | ✅ 比 X4 快 | FULL **1098 ms**（X4 3726）· HALF 1098 ms · FAST **562 ms**（X4 503）· 无变化 440 ms |
+| 输入设备 | 触控专用 | `hasTouch=1`，GT911 在 0x5D（备用 0x14），多点支持 |
+| 其它差异 | — | 无电源锁存（关机 = GPIO44 脉冲串）；触控 INT(GPIO48) **不是 S3 的 RTC IO**，深睡只能定时唤醒，交互要用"浅睡 + GPIO 唤醒"窗口 |
+
+复现：`pio run -e papers3_bringup -t upload`，然后 `pio device monitor`；
+它会打印板级事实、电池、三种刷新的耗时，并把每次触控的
+面板坐标→归一化→逻辑坐标→象限打出来；点哪个角，屏幕上那个角会变黑块。
+
+### 移植计划
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| 1 | 板级校准（上面那张表） | ✅ 完成 |
+| 2 | 骨架：同一套取数/解析层跑在 S3 上 + 触控翻页 + 定时深睡 | 进行中 |
+| 3 | 版式：把 480×800 的硬编码常量抽成 metrics，四页在 540×960 重排 + 字体重烘 | — |
+| 4 | 设置界面：网络扫描/密码键盘/城市候选/自选币种（草图见上一节） | 待做 |
+| 5 | 省电模型：定时唤醒 → 取数画完 → 浅睡（触控唤醒）会话窗口 → 深睡 | 待做 |
+
+**可原样复用**（不依赖板子）：`WeatherClient`（WiFi/TLS/HTTP）、`WeatherParse`（SAX 解析）、
+`WeatherData`、全部主机测试与预览渲染工具。风险集中在显示、输入与电源三块。
+
+## 16. 触屏版设置界面草图
 
 触屏机上配网/选城市不该再改 `config.h` 重烧固件。下面五张是用**真字体 + 真图元**在 540×960
 竖屏逻辑帧上渲染的设计草图（生成器：`tools/sketch/render.sh`，源码 `tools/sketch/render_settings.cpp`）：
@@ -503,7 +539,7 @@ sh tools/preview/render.sh ok /tmp/other.json /tmp/air.json   # 换数据源渲�
 > 可以画浅灰，观感会更好。关机按钮做的是**软件关机**；侧键长按 2 秒是硬件断电，
 > 所以界面卡住时照样能关机。
 
-## 15. 许可与致谢
+## 17. 许可与致谢
 
 - 本目录代码：MIT 许可（见 [LICENSE](LICENSE)，与本 SDK 同为 MIT）。
 - 位图字体：由 **Noto Sans SC**（SIL OFL 1.1）栅格化而来，仓库内保存的是位图数组。
