@@ -15,6 +15,7 @@ using freeink::ui::BitmapMode;
 using freeink::ui::BitmapRef;
 using freeink::ui::Color;
 using freeink::ui::DisplayTarget;
+using freeink::ui::DrawTarget;
 using freeink::ui::FontId;
 using freeink::ui::Paint;
 using freeink::ui::Rect;
@@ -49,7 +50,7 @@ static_assert(kForecastDays == 3, "the Now page reserves exactly three forecast 
 // One line of text placed by its baseline. layoutText() vertically centers the
 // line block in the rect, so passing a rect exactly one line tall pins the
 // baseline to rect.y + font.ascent.
-void drawLine(DisplayTarget& target, const freeink::ui::BitmapFont& font, FontId slot, int16_t x,
+void drawLine(DrawTarget& target, const freeink::ui::BitmapFont& font, FontId slot, int16_t x,
               int16_t baseline, const char* text, TextAlign align, int16_t boxWidth, Color color) {
   if (text == nullptr || text[0] == '\0') return;
   TextStyle style;
@@ -62,20 +63,20 @@ void drawLine(DisplayTarget& target, const freeink::ui::BitmapFont& font, FontId
   target.text(rect, text, style);
 }
 
-int16_t textWidth(DisplayTarget& target, FontId slot, const char* text) {
+int16_t textWidth(DrawTarget& target, FontId slot, const char* text) {
   TextStyle style;
   style.font = slot;
   return target.measureText(slot, text, style).width;
 }
 
-void drawIcon(DisplayTarget& target, Icon icon, const Rect& rect, bool small) {
+void drawIcon(DrawTarget& target, Icon icon, const Rect& rect, bool small) {
   const IconBitmap& chosen = small ? kIcons[static_cast<uint8_t>(icon)].small : kIcons[static_cast<uint8_t>(icon)].big;
   const BitmapRef ref{chosen.data, chosen.width, chosen.height, BitmapFormat::BW1, false};
   target.bitmap(rect, ref, BitmapMode::Contain, Paint::solid(Color::Black));
 }
 
 // A dashed separator: cheaper on the eye (and on the panel) than a solid rule.
-void drawDashedRule(DisplayTarget& target, int16_t y, int16_t x0, int16_t x1) {
+void drawDashedRule(DrawTarget& target, int16_t y, int16_t x0, int16_t x1) {
   const Paint ink = Paint::solid(Color::Black);
   for (int16_t x = x0; x < x1; x += 12) {
     target.line(freeink::ui::Point{x, y}, freeink::ui::Point{static_cast<int16_t>(x + 5), y}, 2, ink);
@@ -116,7 +117,7 @@ const char* pageName(Page page) {
 
 // Small direction marker for a 24 h change: filled pointing up when the price
 // rose, down when it fell, a dash when it barely moved.
-void drawTrendMarker(DisplayTarget& target, int16_t centerX, int16_t centerY, float changePercent) {
+void drawTrendMarker(DrawTarget& target, int16_t centerX, int16_t centerY, float changePercent) {
   const Paint ink = Paint::solid(Color::Black);
   if (changePercent > 0.05f) {
     target.triangle(freeink::ui::Point{centerX, static_cast<int16_t>(centerY - 6)},
@@ -135,7 +136,7 @@ void drawTrendMarker(DisplayTarget& target, int16_t centerX, int16_t centerY, fl
 // --- shared chrome ----------------------------------------------------------
 
 // Outlined battery with a proportional fill, drawn in the header's ink.
-void drawBatteryGlyph(DisplayTarget& target, int16_t x, int16_t y, uint8_t percent) {
+void drawBatteryGlyph(DrawTarget& target, int16_t x, int16_t y, uint8_t percent) {
   const Paint ink = Paint::solid(Color::White);
   constexpr int16_t kBodyWidth = 34;
   constexpr int16_t kBodyHeight = 17;
@@ -151,7 +152,7 @@ void drawBatteryGlyph(DisplayTarget& target, int16_t x, int16_t y, uint8_t perce
   }
 }
 
-void drawHeader(DisplayTarget& target, const ScreenState& state) {
+void drawHeader(DrawTarget& target, const ScreenState& state) {
   const WeatherReport* report = state.report;
   const char* place = state.place;
   target.fill(Rect{0, 0, kWidth, kHeaderBottom}, Paint::solid(Color::Black));
@@ -195,7 +196,7 @@ void drawHeader(DisplayTarget& target, const ScreenState& state) {
   }
 }
 
-void drawFooter(DisplayTarget& target, const ScreenState& state) {
+void drawFooter(DrawTarget& target, const ScreenState& state) {
   if (state.status != nullptr && state.status[0] != '\0') {
     drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kMargin, kFooterBaseline, state.status,
              TextAlign::Left, 240, Color::Black);
@@ -214,7 +215,7 @@ void drawFooter(DisplayTarget& target, const ScreenState& state) {
 
 // A big figure (digits font) centred on its own, with an optional unit drawn in
 // the title font right after it, sharing the baseline.
-void drawFigure(DisplayTarget& target, const char* figure, const char* unit, int16_t baseline) {
+void drawFigure(DrawTarget& target, const char* figure, const char* unit, int16_t baseline) {
   const int16_t figureWidth = textWidth(target, kFontBig, figure);
   const int16_t unitWidth = unit != nullptr ? textWidth(target, kFontTitle, unit) : 0;
   const int16_t gap = 8;
@@ -228,7 +229,7 @@ void drawFigure(DisplayTarget& target, const char* figure, const char* unit, int
   }
 }
 
-void drawMetricsRow(DisplayTarget& target, const CurrentWeather& current, int16_t baseline) {
+void drawMetricsRow(DrawTarget& target, const CurrentWeather& current, int16_t baseline) {
   char feels[32];
   char humidity[24];
   char wind[32];
@@ -256,7 +257,7 @@ void drawMetricsRow(DisplayTarget& target, const CurrentWeather& current, int16_
 
 // --- pages ------------------------------------------------------------------
 
-void drawNowPage(DisplayTarget& target, const WeatherReport& report) {
+void drawNowPage(DrawTarget& target, const WeatherReport& report) {
   const CurrentWeather& current = report.current;
 
   drawIcon(target, conditionIcon(current.code, current.isDay), Rect{176, 128, 128, 128}, false);
@@ -305,7 +306,7 @@ void drawNowPage(DisplayTarget& target, const WeatherReport& report) {
   }
 }
 
-void drawHourlyPage(DisplayTarget& target, const WeatherReport& report) {
+void drawHourlyPage(DrawTarget& target, const WeatherReport& report) {
   drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, kMargin, 150, pageName(Page::Hourly),
            TextAlign::Left, 300, Color::Black);
 
@@ -347,7 +348,7 @@ void drawHourlyPage(DisplayTarget& target, const WeatherReport& report) {
   }
 }
 
-void drawAirQualityScale(DisplayTarget& target, int europeanAqi, int16_t y) {
+void drawAirQualityScale(DrawTarget& target, int europeanAqi, int16_t y) {
   const uint8_t level = aqiLevelIndex(europeanAqi);
   constexpr int16_t kSegments = 6;
   constexpr int16_t kGap = 6;
@@ -363,7 +364,7 @@ void drawAirQualityScale(DisplayTarget& target, int europeanAqi, int16_t y) {
   }
 }
 
-void drawPollutantRow(DisplayTarget& target, int16_t y, const char* label, float value) {
+void drawPollutantRow(DrawTarget& target, int16_t y, const char* label, float value) {
   drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kMargin, static_cast<int16_t>(y + 34), label,
            TextAlign::Left, 160, Color::Black);
   char number[16];
@@ -373,7 +374,7 @@ void drawPollutantRow(DisplayTarget& target, int16_t y, const char* label, float
            TextAlign::Right, 240, Color::Black);
 }
 
-void drawAirQualityPage(DisplayTarget& target, const WeatherReport& report) {
+void drawAirQualityPage(DrawTarget& target, const WeatherReport& report) {
   drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, kMargin, 150, pageName(Page::AirQuality),
            TextAlign::Left, 300, Color::Black);
 
@@ -407,9 +408,9 @@ void drawAirQualityPage(DisplayTarget& target, const WeatherReport& report) {
   drawPollutantRow(target, kPollutantRowsTop + 3 * kPollutantRowHeight, "二氧化氮", air.no2);
 }
 
-void drawSparkline(DisplayTarget& target, const CoinQuote& quote, const Rect& box);
+void drawSparkline(DrawTarget& target, const CoinQuote& quote, const Rect& box);
 
-void drawCryptoPage(DisplayTarget& target, const ScreenState& state) {
+void drawCryptoPage(DrawTarget& target, const ScreenState& state) {
   const WeatherReport& report = *state.report;
   drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, kMargin, 150, pageName(Page::Crypto),
            TextAlign::Left, 300, Color::Black);
@@ -490,7 +491,7 @@ void drawCryptoPage(DisplayTarget& target, const ScreenState& state) {
 
 // Seven-day trend: a 48-point polyline in a small box, with a dashed line at
 // the week's opening price so "up" and "down" read at a glance.
-void drawSparkline(DisplayTarget& target, const CoinQuote& quote, const Rect& box) {
+void drawSparkline(DrawTarget& target, const CoinQuote& quote, const Rect& box) {
   const Paint ink = Paint::solid(Color::Black);
   target.stroke(box, ink, 1);
   if (quote.sparkCount < 2) return;
@@ -527,7 +528,7 @@ void drawSparkline(DisplayTarget& target, const CoinQuote& quote, const Rect& bo
   }
 }
 
-void drawPlaceholder(DisplayTarget& target, const ScreenState& state) {
+void drawPlaceholder(DrawTarget& target, const ScreenState& state) {
   drawIcon(target, Icon::Unknown, Rect{176, 200, 128, 128}, false);
   drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, 0, 420,
            state.busy ? "正在获取天气…" : "暂无数据", TextAlign::Center, kWidth, Color::Black);
@@ -554,7 +555,7 @@ void configureWeatherFonts(DisplayTarget& target, CjkGlyphSource& fallback) {
   target.setGlyphFallback(&fallback);
 }
 
-void renderWeatherScreen(DisplayTarget& target, const ScreenState& state) {
+void renderWeatherScreen(DrawTarget& target, const ScreenState& state) {
   target.fill(Rect{0, 0, kWidth, kHeight}, Paint::solid(Color::White));
 
   const WeatherReport* report = state.report;

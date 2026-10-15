@@ -89,6 +89,12 @@
 #define WEATHER_FORECAST_HOURS 12
 #endif
 
+// 触屏机（PaperS3）画完之后的交互窗口：这段时间内保持清醒听触控（点击翻页、
+// 上下滑换排序、长按关机），超时无操作就去睡下一轮。X4 用按键会话，不看这个值。
+#ifndef WEATHER_TOUCH_SESSION_MS
+#define WEATHER_TOUCH_SESSION_MS 40000
+#endif
+
 // 冷启动（上电/复位/烧录后）先显示哪一页：0 数字货币 / 1 当前天气 / 2 逐小时 / 3 空气质量。
 // 深睡唤醒不受影响——那会继续显示你上次看的那一页。
 #ifndef WEATHER_DEFAULT_PAGE

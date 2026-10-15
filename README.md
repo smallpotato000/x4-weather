@@ -500,13 +500,43 @@ SDK 文档给 PaperS3 标了三项 "pending hardware validation"，一次烧录�
 它会打印板级事实、电池、三种刷新的耗时，并把每次触控的
 面板坐标→归一化→逻辑坐标→象限打出来；点哪个角，屏幕上那个角会变黑块。
 
+### 骨架已在真机跑通（`[env:papers3]` / `[env:papers3_bench]`）
+
+同一份 `src/main.cpp` 编译出两个板子的固件，只有显示、输入与电源三处按板子分叉：
+
+- **画布缩放**：`include/ScaledDrawTarget.h` 是一个 `DrawTarget` 装饰器，把 X4 的 480×800 版式
+  按 1.125× 居中映射进 PaperS3 的 540×960 竖屏逻辑帧 —— `WeatherUi.cpp` 一行没改，
+  X4 的 7 张预览渲染图**逐字节不变**（做过字节级回归）；
+- **触控**：`interactiveTouchSession()` —— 点左/右半屏翻页、行情页上下滑换排序、
+  长按 2.5 秒关机、点底部 80px 立即休眠。触摸坐标经 `touchToLogical()` 归一化映射到逻辑帧；
+- **电源**：PaperS3 没有锁存脚也没有可读按键，关机走 `BoardPaperS3::powerOff()` 的脉冲串，
+  深睡只有定时唤醒（30 分钟），所以每次唤醒都开一个触控窗口；
+- **踩过的两个坑**（都写进 `tools/flash_papers3.sh` 注释）：S3 深睡会关掉 USB 外设、
+  端口消失（脚本会等下一次唤醒）；手写 esptool 时若把 flash 模式硬写成 `qio` 而镜像头是 DIO，
+  会进 `TG0WDT_SYS_RST` 看门狗重启循环 —— 用 `--flash_mode keep` 并补上 `boot_app0.bin`。
+
+真机实测（`papers3_bench`：30 分钟交互窗口 + 2 分钟刷新）：
+
+```
+[weather] m5paper_s3 weather station, wake #1 (power-on/reset), clock 12:33
+[weather] layout scaled x1.125 into 540x960 logical frame
+[weather] geocoded "Wuhan" -> 30.5833, 114.2667 (Asia/Shanghai, China)
+[weather] crypto quotes HTTP 200: 7/7 coins
+[weather] BTC 81288 / ETH 2375.34 / XMR 544.11
+[weather] touch session (1800000 ms idle timeout, page 0)
+[weather] touch (507,388) -> (522,126), 579 ms, d=(15,-262)   → crypto sort: 涨幅榜
+[weather] touch (505,268) -> (765,251), 236 ms, d=(260,-17)   → 翻页（水平分量占优）
+```
+
+![PaperS3 上的行情页](docs/paper-crypto.png)
+
 ### 移植计划
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 1 | 板级校准（上面那张表） | ✅ 完成 |
-| 2 | 骨架：同一套取数/解析层跑在 S3 上 + 触控翻页 + 定时深睡 | 进行中 |
-| 3 | 版式：把 480×800 的硬编码常量抽成 metrics，四页在 540×960 重排 + 字体重烘 | — |
+| 2 | 骨架：同一套取数/解析层跑在 S3 上 + 触控翻页 + 定时深睡 | ✅ 完成（真机验证） |
+| 3 | 版式精修（可选）：行高/字号按触控尺寸调整 + 16 级灰度利用 | 待做 |
 | 4 | 设置界面：网络扫描/密码键盘/城市候选/自选币种（草图见上一节） | 待做 |
 | 5 | 省电模型：定时唤醒 → 取数画完 → 浅睡（触控唤醒）会话窗口 → 深睡 | 待做 |
 

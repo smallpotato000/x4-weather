@@ -20,16 +20,24 @@
 #include <string>
 
 #include "CjkGlyphSource.h"
+#include "ScaledDrawTarget.h"
 #include "WeatherParse.h"
 #include "WeatherUi.h"
 
 namespace {
 
-constexpr int16_t kPanelWidth = 800;
-constexpr int16_t kPanelHeight = 480;
-constexpr int16_t kPanelWidthBytes = kPanelWidth / 8;
+// The X4 panel, and the PaperS3 panel the same layout is scaled onto. The
+// framebuffer is sized for the bigger one; the active geometry is set in main().
+constexpr int16_t kX4Width = 800;
+constexpr int16_t kX4Height = 480;
+constexpr int16_t kPaperWidth = 960;
+constexpr int16_t kPaperHeight = 540;
 
-uint8_t gFramebuffer[kPanelWidthBytes * kPanelHeight];
+int16_t gPanelWidth = kX4Width;
+int16_t gPanelHeight = kX4Height;
+int16_t gPanelWidthBytes = kX4Width / 8;
+
+uint8_t gFramebuffer[(kPaperWidth / 8) * kPaperHeight];
 
 // Synthetic fallback when no response file is given (also exercises the
 // "unknown/rain" icon paths).
@@ -131,8 +139,8 @@ bool loadCrypto(const char* path, weather::CryptoBoard& board) {
 int writePbm(const char* path) {
   FILE* file = std::fopen(path, "wb");
   if (file == nullptr) return 1;
-  std::fprintf(file, "P4\n%d %d\n", kPanelWidth, kPanelHeight);
-  std::fwrite(gFramebuffer, 1, sizeof(gFramebuffer), file);
+  std::fprintf(file, "P4\n%d %d\n", gPanelWidth, gPanelHeight);
+  std::fwrite(gFramebuffer, 1, static_cast<size_t>(gPanelWidthBytes) * gPanelHeight, file);
   std::fclose(file);
   return 0;
 }
@@ -151,20 +159,46 @@ int main(int argc, char** argv) {
   setenv("TZ", "UTC0", 1);
   tzset();
 
+  // "paper-<variant>" renders the same pages onto the PaperS3's 960x540 panel
+  // with the X4's 480x800 layout scaled by 540/480 and centred vertically.
+  std::string page(variant);
+  bool paper = false;
+  if (page.rfind("paper-", 0) == 0) {
+    paper = true;
+    page = page.substr(6);
+  }
+  const char* pageName = page.c_str();
+
   std::memset(gFramebuffer, 0xFF, sizeof(gFramebuffer));
-  freeink::ui::DisplayTarget target(gFramebuffer, kPanelWidth, kPanelHeight, kPanelWidthBytes);
+  gPanelWidth = paper ? kPaperWidth : kX4Width;
+  gPanelHeight = paper ? kPaperHeight : kX4Height;
+  gPanelWidthBytes = gPanelWidth / 8;
+
+  freeink::ui::DisplayTarget target(gFramebuffer, gPanelWidth, gPanelHeight, gPanelWidthBytes);
   weather::CjkGlyphSource cjk;
   weather::configureWeatherFonts(target, cjk);
+
+  // The layout's own frame is always 480x800; on the PaperS3 that is scaled into
+  // the 540x960 logical frame.
+  // Fit the 480x800 layout into the logical frame: the smaller of the two axis
+  // ratios, then centred (the PaperS3 frame is 540x960, so 1.125 and 30 px down).
+  const float fitX = static_cast<float>(target.logicalWidth()) / 480.0f;
+  const float fitY = static_cast<float>(target.logicalHeight()) / 800.0f;
+  const float fit = fitX < fitY ? fitX : fitY;
+  const int16_t offsetX = static_cast<int16_t>((target.logicalWidth() - 480.0f * fit) / 2.0f);
+  const int16_t offsetY = static_cast<int16_t>((target.logicalHeight() - 800.0f * fit) / 2.0f);
+  weather::ScaledDrawTarget scaled(target, fit, offsetX, offsetY);
+  freeink::ui::DrawTarget& canvas = paper ? static_cast<freeink::ui::DrawTarget&>(scaled) : target;
 
   weather::WeatherReport report;
   weather::ScreenState state;
   state.place = "武汉";
 
-  const bool hourlyPage = std::strcmp(variant, "hourly") == 0;
-  const bool airPage = std::strcmp(variant, "aqi") == 0;
-  const bool cryptoGainers = std::strcmp(variant, "crypto-gainers") == 0;
-  const bool cryptoLosers = std::strcmp(variant, "crypto-losers") == 0;
-  const bool cryptoPage = std::strcmp(variant, "crypto") == 0 || cryptoGainers || cryptoLosers;
+  const bool hourlyPage = std::strcmp(pageName, "hourly") == 0;
+  const bool airPage = std::strcmp(pageName, "aqi") == 0;
+  const bool cryptoGainers = std::strcmp(pageName, "crypto-gainers") == 0;
+  const bool cryptoLosers = std::strcmp(pageName, "crypto-losers") == 0;
+  const bool cryptoPage = std::strcmp(pageName, "crypto") == 0 || cryptoGainers || cryptoLosers;
   state.page = hourlyPage ? weather::Page::Hourly
                           : (airPage ? weather::Page::AirQuality
                                      : (cryptoPage ? weather::Page::Crypto : weather::Page::Now));
@@ -181,10 +215,10 @@ int main(int argc, char** argv) {
                                : (cryptoLosers ? "上下排序 跌幅榜" : "上下排序 表序");
   }
 
-  if (std::strcmp(variant, "busy") == 0) {
+  if (std::strcmp(pageName, "busy") == 0) {
     state.busy = true;
     state.status = "正在连接 WiFi";
-  } else if (std::strcmp(variant, "error") == 0) {
+  } else if (std::strcmp(pageName, "error") == 0) {
     state.status = "获取失败，请检查网络与位置";
   } else {
     const bool loaded = responsePath != nullptr && loadReport(responsePath, report);
@@ -210,15 +244,16 @@ int main(int argc, char** argv) {
     state.status = statusBuffer;
   }
 
-  weather::renderWeatherScreen(target, state);
+  weather::renderWeatherScreen(canvas, state);
 
   const int rc = writePbm(out);
   if (rc != 0) {
     std::fprintf(stderr, "error: cannot write %s\n", out);
     return rc;
   }
-  std::printf("wrote %s (panel %dx%d, logical portrait 480x800), variant=%s%s%s\n", out, kPanelWidth,
-              kPanelHeight, variant, responsePath != nullptr ? ", response=" : "",
+  std::printf("wrote %s (panel %dx%d, %s), variant=%s%s%s\n", out, gPanelWidth, gPanelHeight,
+              paper ? "PaperS3 540x960 logical, X4 layout scaled 1.125" : "logical portrait 480x800",
+              variant, responsePath != nullptr ? ", response=" : "",
               responsePath != nullptr ? responsePath : "");
   return 0;
 }

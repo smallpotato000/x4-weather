@@ -52,7 +52,7 @@ struct ScreenState {
 };
 
 // Repaints the full screen. The caller owns the panel refresh.
-void renderWeatherScreen(freeink::ui::DisplayTarget& target, const ScreenState& state);
+void renderWeatherScreen(freeink::ui::DrawTarget& target, const ScreenState& state);
 
 // Page cycling helpers for the button handling in main.cpp.
 Page nextPage(Page page);

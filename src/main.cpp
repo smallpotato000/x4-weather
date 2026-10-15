@@ -26,7 +26,12 @@
 #include <driver/gpio.h>
 #include <esp_sleep.h>
 
+#if FREEINK_DEVICE_PAPERS3
+#include <BoardPaperS3.h>  // powerOff(): the PMS150G latch takes a pulse train
+#endif
+
 #include "CjkGlyphSource.h"
+#include "ScaledDrawTarget.h"
 #include "WeatherClient.h"
 #include "WeatherUi.h"
 #include "config.h"
@@ -117,6 +122,28 @@ weather::Page page = weather::Page::Now;
 
 void setStatus(const char* text) { snprintf(statusLine, sizeof(statusLine), "%s", text); }
 
+// The weather pages are laid out in a 480x800 logical frame. On the PaperS3 the
+// portrait frame is 540x960, so the same layout is drawn through a scaling
+// wrapper (fit + centre) instead of growing a second layout implementation.
+freeink::ui::DrawTarget& canvas() {
+#if FREEINK_DEVICE_PAPERS3
+  static weather::ScaledDrawTarget* scaled = nullptr;
+  if (scaled == nullptr && target != nullptr) {
+    const float fitX = static_cast<float>(target->logicalWidth()) / 480.0f;
+    const float fitY = static_cast<float>(target->logicalHeight()) / 800.0f;
+    const float fit = fitX < fitY ? fitX : fitY;
+    scaled = new weather::ScaledDrawTarget(
+        *target, fit, static_cast<int16_t>((target->logicalWidth() - 480.0f * fit) / 2.0f),
+        static_cast<int16_t>((target->logicalHeight() - 800.0f * fit) / 2.0f));
+    Serial.printf("[weather] layout scaled x%.3f into %dx%d logical frame\n",
+                  static_cast<double>(fit), static_cast<int>(target->logicalWidth()),
+                  static_cast<int>(target->logicalHeight()));
+  }
+  if (scaled != nullptr) return *scaled;
+#endif
+  return *target;
+}
+
 void paint(EInkDisplay::RefreshMode mode) {
   if (target == nullptr) return;
   weather::ScreenState state;
@@ -136,7 +163,7 @@ void paint(EInkDisplay::RefreshMode mode) {
              weather::cryptoSortName(static_cast<weather::CryptoSort>(cryptoSortIndex)));
     state.hint = hintLine;
   }
-  weather::renderWeatherScreen(*target, state);
+  weather::renderWeatherScreen(canvas(), state);
   display.displayBuffer(mode);
 }
 
@@ -167,9 +194,23 @@ bool powerKeyHeldForPowerOff() {
 // On USB power the board stays alive, and this then behaves like "off until the
 // power key is pressed again".
 [[noreturn]] void powerOff() {
-  Serial.println("[weather] power key held: switching off");
+  Serial.println("[weather] switching off");
   client.endWifi();
   display.deepSleep();
+
+#if FREEINK_DEVICE_PAPERS3
+  // No power latch for firmware to hold and no readable button: the PMS150G
+  // releases the rail on a pulse train, and nothing but the RTC alarm can turn
+  // the board back on. Fall through to a sleep in case the rail did not cut.
+  freeink::PowerManager::powerDownRailsForSleep();
+  Serial.println("[weather] sending the power-off pulse train");
+  Serial.flush();
+  BoardPaperS3::powerOff();
+  esp_sleep_enable_timer_wakeup(60ULL * 1000000ULL);
+  Serial.println("[weather] off (pulse train sent)");
+  Serial.flush();
+  esp_deep_sleep_start();
+#else
   freeink::PowerManager::powerDownRailsForSleep();
 
   // Let the key go before arming it, or the wake fires the instant we sleep.
@@ -189,6 +230,7 @@ bool powerKeyHeldForPowerOff() {
   Serial.printf("[weather] off (wake #%u)\n", static_cast<unsigned>(wakeCount));
   Serial.flush();
   freeink::PowerManager::deepSleep();  // no timer: only the power key comes back
+#endif
 }
 
 // --- battery ----------------------------------------------------------------
@@ -548,6 +590,117 @@ void interactiveSession(int initialButton) {
 
 }  // namespace
 
+
+#if FREEINK_DEVICE_PAPERS3
+// Touch session. The PaperS3 has no readable buttons at all, so every wake ends
+// with a window like this one: taps and swipes drive exactly the actions the
+// X4's keys drive, and the window closes after WEATHER_TOUCH_SESSION_MS of
+// silence. (A light-sleep variant with touch-to-wake is the next step; this
+// version stays awake, which costs about what an X4 button session costs.)
+void interactiveTouchSession() {
+  refreshBattery();
+  pageIndex = static_cast<uint8_t>(page);
+  Serial.printf("[weather] touch session (%u ms idle timeout, page %u)\n",
+                static_cast<unsigned>(WEATHER_TOUCH_SESSION_MS), static_cast<unsigned>(pageIndex));
+
+  uint32_t lastActivity = millis();
+  uint32_t downAt = 0;
+  uint16_t downX = 0;
+  uint16_t downY = 0;
+  uint16_t lastX = 0;  // last point seen while the finger was down
+  uint16_t lastY = 0;
+  bool touching = false;
+
+  while (millis() - lastActivity < WEATHER_TOUCH_SESSION_MS) {
+    input.update();
+    const bool pressed = input.isTouchPressed();
+
+    if (pressed) {
+      const InputManager::TouchPoint point = input.getTouchPoint();
+      if (point.valid) {
+        lastX = point.x;
+        lastY = point.y;
+      }
+      if (!touching) {
+        downX = lastX;
+        downY = lastY;
+        downAt = millis();
+        touching = true;
+      }
+    } else if (touching) {
+      touching = false;
+      // The release itself carries no valid point, so the gesture is measured
+      // against the last position the finger actually reported.
+      const uint16_t upX = lastX;
+      const uint16_t upY = lastY;
+      const int32_t dx = static_cast<int32_t>(upX) - downX;
+      const int32_t dy = static_cast<int32_t>(upY) - downY;
+      Serial.printf("[weather] touch (%u,%u) -> (%u,%u), %u ms, d=(%d,%d)\n",
+                    static_cast<unsigned>(downX), static_cast<unsigned>(downY),
+                    static_cast<unsigned>(upX), static_cast<unsigned>(upY),
+                    static_cast<unsigned>(millis() - downAt), static_cast<int>(dx),
+                    static_cast<int>(dy));
+      const uint32_t held = millis() - downAt;
+      lastActivity = millis();
+
+      const freeink::ui::Point logical = freeink::ui::touchToLogical(
+          target->deviceContext(), static_cast<float>(upX) / BoardConfig::ACTIVE.displayWidth,
+          static_cast<float>(upY) / BoardConfig::ACTIVE.displayHeight);
+      const int16_t logicalWidth = target->logicalWidth();
+      const int16_t logicalHeight = target->logicalHeight();
+      const int32_t absDx = dx < 0 ? -dx : dx;
+      const int32_t absDy = dy < 0 ? -dy : dy;
+
+      bool repaint = false;
+      if (held >= 2500 && absDx < 40 && absDy < 40) {
+        // Flush before the rail goes away, or the log of the power-off is lost.
+        Serial.printf("[weather] long press %u ms at logical (%d,%d): powering off\n",
+                      static_cast<unsigned>(held), static_cast<int>(logical.x),
+                      static_cast<int>(logical.y));
+        Serial.flush();
+        powerOff();  // does not return
+      } else if (absDy > 60 && absDy > absDx) {
+        // Vertical swipe: on the crypto page it re-orders the rows.
+        if (page == weather::Page::Crypto) {
+          const uint8_t step = dy < 0 ? 1 : weather::kCryptoSortCount - 1;
+          cryptoSortIndex = static_cast<uint8_t>((cryptoSortIndex + step) % weather::kCryptoSortCount);
+          Serial.printf("[weather] crypto sort: %s\n",
+                        weather::cryptoSortName(static_cast<weather::CryptoSort>(cryptoSortIndex)));
+          repaint = true;
+        }
+      } else if (absDx > 60) {
+        page = dx < 0 ? weather::nextPage(page) : weather::previousPage(page);
+        repaint = true;
+      } else {
+        // Tap: the bottom strip closes the session, the halves page.
+        if (logical.y > logicalHeight - 80) {
+          Serial.printf("[weather] bottom tap at logical (%d,%d): closing the session\n",
+                        static_cast<int>(logical.x), static_cast<int>(logical.y));
+          lastActivity = 0;
+          break;
+        }
+        const weather::Page before = page;
+        page = logical.x < logicalWidth / 2 ? weather::previousPage(page) : weather::nextPage(page);
+        Serial.printf("[weather] tap logical (%d,%d): page %u -> %u\n", static_cast<int>(logical.x),
+                      static_cast<int>(logical.y), static_cast<unsigned>(before),
+                      static_cast<unsigned>(page));
+        repaint = true;
+      }
+
+      if (repaint) {
+        pageIndex = static_cast<uint8_t>(page);
+        if (page == weather::Page::AirQuality) ensureAirQuality();
+        if (page == weather::Page::Crypto) ensureCrypto();
+        paint(EInkDisplay::FAST_REFRESH);
+      }
+    }
+    delay(10);
+  }
+  Serial.printf("[weather] touch session over (page %u after %u ms)\n",
+                static_cast<unsigned>(pageIndex), static_cast<unsigned>(millis()));
+}
+#endif
+
 void setup() {
   ++wakeCount;
 
@@ -571,7 +724,7 @@ void setup() {
 
   char bootClock[8];
   weather::formatClock(client.epochNow(), bootClock, sizeof(bootClock));
-  Serial.printf("\n[weather] Xteink X4 weather station, wake #%u (%s), clock %s\n",
+  Serial.printf("\n[weather] %s weather station, wake #%u (%s), clock %s\n", BoardConfig::ACTIVE.name,
                 static_cast<unsigned>(wakeCount), causeText, bootClock);
 
   // Assert the battery latch (GPIO13 on the X4) before anything else, and make
@@ -580,9 +733,11 @@ void setup() {
   BoardConfig::holdPowerRails();
   BoardConfig::releaseSdRail();
 
+#if !FREEINK_DEVICE_PAPERS3
   // Holding the power key while it is the *wake* source means "switch off".
   // (Not on a cold boot: holding the key is how the board is turned on.)
   if (cause == ESP_SLEEP_WAKEUP_GPIO && powerKeyHeldForPowerOff()) powerOff();
+#endif
 
   display.begin();
   target = new freeink::ui::DisplayTarget(display.getFrameBuffer(), display.getDisplayWidth(),
@@ -627,7 +782,11 @@ void setup() {
 
   const uint32_t sleepMinutes = runCycle(coldBoot);
 
-#if WEATHER_INTERACTIVE_SECONDS > 0
+#if FREEINK_DEVICE_PAPERS3
+  // There are no readable buttons on the PaperS3, so every wake opens a touch
+  // window: the panel is already showing fresh data, and taps land immediately.
+  interactiveTouchSession();
+#elif WEATHER_INTERACTIVE_SECONDS > 0
   // A power-key wake goes straight into the session; a timer wake waits a moment
   // in case someone is pressing a key right then.
   int initialButton = -1;
