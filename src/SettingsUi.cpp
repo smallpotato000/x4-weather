@@ -500,6 +500,11 @@ void renderSettingsScreen(freeink::ui::DrawTarget& target, const SettingsUiState
   static const char* const kPageLabels[] = {"数字货币", "当前天气", "逐小时", "空气质量"};
   if (state.settings == nullptr) return;
 
+  // Clear the whole frame first: the panel diff only sees what changed, so
+  // anything this screen does not draw would otherwise keep the previous
+  // screen's pixels and the two would show through each other.
+  target.fill(Rect{0, 0, L::width, L::height}, kPaper);
+
   switch (state.screen) {
     case SettingsScreen::Home:
       drawHome(target, state);

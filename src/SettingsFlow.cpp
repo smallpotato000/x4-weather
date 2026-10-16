@@ -79,10 +79,13 @@ void syncUi() {
   }
 }
 
-void repaint() {
+// `full` runs the clean waveform: use it whenever the layout changes wholesale
+// (entering settings, switching screens, status text that replaces a longer
+// line), and the fast differential path for single-key updates.
+void repaint(bool full = false) {
   syncUi();
   renderSettingsScreen(*g->target, ui);
-  g->display->displayBuffer(EInkDisplay::FAST_REFRESH);
+  g->display->displayBuffer(full ? EInkDisplay::FULL_REFRESH : EInkDisplay::FAST_REFRESH);
   lastActivity = millis();
 }
 
@@ -90,7 +93,7 @@ void goTo(SettingsScreen screen) {
   ui.screen = screen;
   confirmOff = false;
   clearStatus();
-  repaint();
+  repaint(/*full=*/true);
 }
 
 bool inside(const Point& p, int16_t x, int16_t y, int16_t w, int16_t h) {
@@ -112,7 +115,7 @@ bool headerActionTapped(const Point& p) { return p.x > L::rightEdge - 170 && p.y
 
 void scanWifi() {
   setStatus("正在扫描附近网络…");
-  repaint();
+  repaint(true);
 
   WiFi.mode(WIFI_STA);
   const int16_t found = WiFi.scanNetworks();
@@ -148,13 +151,13 @@ void scanWifi() {
   char text[48];
   std::snprintf(text, sizeof(text), "扫描到 %u 个网络", static_cast<unsigned>(list.count));
   setStatus(text);
-  repaint();
+  repaint(true);
 }
 
 // Connects, and on success stores the credentials. Returns true when connected.
 bool connectWifi(const char* ssid, const char* password) {
   setStatus("正在连接…");
-  repaint();
+  repaint(true);
 
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
@@ -180,7 +183,7 @@ bool connectWifi(const char* ssid, const char* password) {
     } else {
       setStatus("连接超时，请重试");
     }
-    repaint();
+    repaint(true);
     return false;
   }
 
@@ -190,7 +193,7 @@ bool connectWifi(const char* ssid, const char* password) {
   char text[72];
   std::snprintf(text, sizeof(text), "已连接 %s", ssid);
   setStatus(text);
-  repaint();
+  repaint(true);
   return true;
 }
 
@@ -567,7 +570,7 @@ void runSettingsSession(SettingsFlowContext& context) {
   Serial.printf("[weather] settings session (%u ms idle timeout, %s)\n",
                 static_cast<unsigned>(kIdleExitMs),
                 sleeping ? "light sleep between touches" : "awake (USB present)");
-  repaint();
+  repaint(/*full=*/true);  // clean slate over whatever the data page left
 
   bool touching = false;
   uint16_t downX = 0;

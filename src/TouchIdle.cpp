@@ -22,7 +22,7 @@ bool usbPowerPresent() {
     const int pulledDown = digitalRead(pin);
     if (!logged) {
       logged = true;
-      Serial.printf("[weather] usbDetect GPIO%d: floating=%d pullup=%d pulldown=%d\\n", pin, floating,
+      Serial.printf("[weather] usbDetect GPIO%d: floating=%d pullup=%d pulldown=%d\n", pin, floating,
                     pulledUp, pulledDown);
     }
     pinMode(pin, INPUT_PULLUP);
@@ -56,7 +56,7 @@ void idleSlice(bool& sleeping, uint32_t sliceMs) {
   const bool usb = usbPowerPresent();
   if (usb != !sleeping) {
     sleeping = !usb;
-    Serial.printf("[weather] session idle mode: %s\\n",
+    Serial.printf("[weather] session idle mode: %s\n",
                   sleeping ? "light sleep between touches" : "awake (USB present)");
     Serial.flush();
   }

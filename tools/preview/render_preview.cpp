@@ -236,7 +236,18 @@ bool renderSettingsVariant(const char* pageName, const char* out) {
   gPanelWidth = kPaperWidth;
   gPanelHeight = kPaperHeight;
   gPanelWidthBytes = gPanelWidth / 8;
+  // Fill with a hatch instead of white before drawing: the panel diff only sees
+  // what changed, so a screen that forgets to clear its background keeps the
+  // previous frame in the real firmware. White would hide exactly that bug (it
+  // did once), a hatch makes any unpainted area obvious in the preview.
   std::memset(gFramebuffer, 0xFF, sizeof(gFramebuffer));
+  for (int16_t y = 0; y < gPanelHeight; ++y) {
+    for (int16_t x = 0; x < gPanelWidth; ++x) {
+      if (((x + y) / 5) % 2 == 0) {
+        gFramebuffer[(y * gPanelWidthBytes) + (x / 8)] &= static_cast<uint8_t>(~(0x80 >> (x % 8)));
+      }
+    }
+  }
   freeink::ui::DisplayTarget target(gFramebuffer, gPanelWidth, gPanelHeight, gPanelWidthBytes);
   weather::CjkGlyphSource cjk;
   weather::configureWeatherFonts(target, cjk);
