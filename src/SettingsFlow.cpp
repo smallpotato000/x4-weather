@@ -25,7 +25,7 @@ using freeink::ui::Rect;
 
 using L = SettingsLayout;
 
-constexpr uint32_t kIdleExitMs = 30000;   // no touch for this long -> leave settings
+constexpr uint32_t kIdleExitMs = 60000;   // no touch for this long -> leave settings
 constexpr uint32_t kLongPressMs = 2500;   // hold to power off, like the data pages
 
 SettingsFlowContext* g = nullptr;
@@ -93,6 +93,8 @@ void goTo(SettingsScreen screen) {
   ui.screen = screen;
   confirmOff = false;
   clearStatus();
+  Serial.printf("[settings] screen -> %s\n", settingsScreenTitle(screen));
+  Serial.flush();
   repaint(/*full=*/true);
 }
 
@@ -325,6 +327,7 @@ void handleHome(const Point& p) {
     clearStatus();
   }
 
+  Serial.printf("[settings] home row %d\n", row);
   switch (row) {
     case 0:
       goTo(SettingsScreen::Wifi);
@@ -368,6 +371,7 @@ void handleWifi(const Point& p) {
   }
 
   const WifiEntry& entry = list.items[row];
+  Serial.printf("[settings] wifi row %d: %s%s\n", row, entry.ssid, entry.secure ? " (locked)" : " (open)");
   std::snprintf(ssidBuffer, sizeof(ssidBuffer), "%s", entry.ssid);
   passwordBuffer[0] = '\0';
   if (!entry.secure) {
@@ -432,6 +436,7 @@ void handleCity(const Point& p) {
     return;
   }
   const BuiltinCity& city = builtinCity(static_cast<uint8_t>(row));
+  Serial.printf("[settings] city row %d: %s\n", row, city.label);
   selectCity(city.label, city.searchName, city.latitude, city.longitude);
 }
 
