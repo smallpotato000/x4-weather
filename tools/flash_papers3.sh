@@ -12,7 +12,7 @@
 set -e
 cd "$(dirname "$0")/.."
 
-PORT="${1:-/dev/cu.usbmodem21201}"
+PORT="${1:-auto}"  # "auto" picks the first /dev/cu.usbmodem* that shows up
 ENV_NAME="${2:-papers3}"
 WAIT_SECONDS="${3:-1800}"
 WATCH_SECONDS="${4:-45}"
@@ -41,10 +41,27 @@ if [ ! -f "$BOOT_APP0" ]; then
   exit 1
 fi
 
-log "[flash] waiting for $PORT (up to ${WAIT_SECONDS}s) to write $ENV_NAME"
+# The port name is not stable: a re-enumerated board can come back as a
+# different /dev/cu.usbmodemNNNN, so "auto" waits for whichever appears.
+resolve_port() {
+  if [ "$PORT" != "auto" ]; then
+    [ -c "$PORT" ] && printf '%s' "$PORT" && return 0
+    return 1
+  fi
+  for candidate in /dev/cu.usbmodem*; do
+    if [ -c "$candidate" ]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+log "[flash] waiting for ${PORT} (up to ${WAIT_SECONDS}s) to write $ENV_NAME"
 deadline=$(( $(date +%s) + WAIT_SECONDS ))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-  if [ -c "$PORT" ]; then
+  if FOUND=$(resolve_port); then
+    PORT="$FOUND"
     log "[flash] $(date +%H:%M:%S) $PORT is up — flashing"
     # --after no-reset keeps the stub flasher in place so the write is not cut
     # short by the app booting into deep sleep mid-upload.

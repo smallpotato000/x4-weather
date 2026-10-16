@@ -592,6 +592,66 @@ void interactiveSession(int initialButton) {
 
 
 #if FREEINK_DEVICE_PAPERS3
+// Sleep in slices with the GT911 interrupt armed. The PaperS3's touch IRQ is
+// GPIO48, which is not an RTC IO (so it cannot wake deep sleep) but light sleep's
+// GPIO wake works on any pin -- the same trick M5Unified uses. A one-second
+// safety timer keeps the loop alive even if the IRQ line never asserts.
+constexpr uint32_t kWakeSliceMs = 1000;
+
+// The USB-Serial-JTAG link does not survive light sleep, so sleeping between
+// touches would take the log with it. While USB power is present (bench work,
+// flashing) the session therefore stays awake; on battery it sleeps.
+//
+// Two independent sources, because the profile's usbDetect polarity is worth
+// verifying per unit: GPIO5 (profile says HIGH = USB present) read with a
+// pull-up, or the charger telling us it is charging. The first call logs all
+// three pull states so the polarity is visible in the log.
+bool usbPowerPresent() {
+  const int8_t pin = BoardConfig::ACTIVE.usbDetect;
+  static bool logged = false;
+  bool pinSaysYes = false;
+  if (pin >= 0) {
+    pinMode(pin, INPUT);
+    const int floating = digitalRead(pin);
+    pinMode(pin, INPUT_PULLUP);
+    const int pulledUp = digitalRead(pin);
+    pinMode(pin, INPUT_PULLDOWN);
+    const int pulledDown = digitalRead(pin);
+    if (!logged) {
+      logged = true;
+      Serial.printf("[weather] usbDetect GPIO%d: floating=%d pullup=%d pulldown=%d\n", pin, floating,
+                    pulledUp, pulledDown);
+    }
+    pinMode(pin, INPUT_PULLUP);
+    // Measured on this hardware: the pin is actively driven LOW while USB is
+    // attached (floating/pull-up/pull-down all read 0 with the cable in), so the
+    // profile's "HIGH = USB present" comment is inverted for PaperS3. Charging is
+    // kept as a second vote, but it cannot be the only one: a full battery stops
+    // charging while the cable stays plugged in.
+    pinSaysYes = digitalRead(pin) == LOW;
+  }
+  const bool charging = batteryMonitor.isCharging();
+  return pinSaysYes || charging;
+}
+
+esp_sleep_wakeup_cause_t lightSleepSlice(uint32_t ms) {
+  if (ms == 0) return ESP_SLEEP_WAKEUP_UNDEFINED;
+  esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(ms) * 1000ULL);
+
+  const int8_t irq = BoardConfig::ACTIVE.touch.irq;
+  if (irq >= 0) {
+    const gpio_num_t pin = static_cast<gpio_num_t>(irq);
+    gpio_wakeup_enable(pin, BoardConfig::ACTIVE.touch.irqActiveLow ? GPIO_INTR_LOW_LEVEL
+                                                                  : GPIO_INTR_HIGH_LEVEL);
+    esp_sleep_enable_gpio_wakeup();
+  }
+  esp_light_sleep_start();
+  if (irq >= 0) {
+    gpio_wakeup_disable(static_cast<gpio_num_t>(irq));
+  }
+  return esp_sleep_get_wakeup_cause();
+}
+
 // Touch session. The PaperS3 has no readable buttons at all, so every wake ends
 // with a window like this one: taps and swipes drive exactly the actions the
 // X4's keys drive, and the window closes after WEATHER_TOUCH_SESSION_MS of
@@ -600,8 +660,11 @@ void interactiveSession(int initialButton) {
 void interactiveTouchSession() {
   refreshBattery();
   pageIndex = static_cast<uint8_t>(page);
-  Serial.printf("[weather] touch session (%u ms idle timeout, page %u)\n",
-                static_cast<unsigned>(WEATHER_TOUCH_SESSION_MS), static_cast<unsigned>(pageIndex));
+  client.endWifi();  // the window is touch-only; page data is already cached
+  bool sleeping = !usbPowerPresent();  // current idle mode, re-checked every slice
+  Serial.printf("[weather] touch session (%u ms idle timeout, page %u, %s)\n",
+                static_cast<unsigned>(WEATHER_TOUCH_SESSION_MS), static_cast<unsigned>(pageIndex),
+                sleeping ? "light sleep between touches" : "awake: USB present");
 
   uint32_t lastActivity = millis();
   uint32_t downAt = 0;
@@ -611,9 +674,48 @@ void interactiveTouchSession() {
   uint16_t lastY = 0;
   bool touching = false;
 
+  uint32_t irqWakes = 0;
+  uint32_t timerWakes = 0;
+
   while (millis() - lastActivity < WEATHER_TOUCH_SESSION_MS) {
     input.update();
     const bool pressed = input.isTouchPressed();
+
+    // Nothing on the glass: sleep instead of spinning at full clock. WiFi is
+    // already down, so the only thing that can end this is a finger or the
+    // slice timer.
+    if (!pressed && !touching) {
+      // USB on the bench means the log matters more than the microamps; on
+      // battery the session sleeps between touches. Checked every slice so
+      // unplugging (or plugging) switches modes without a reboot.
+      const bool usb = usbPowerPresent();
+      if (usb != !sleeping) {
+        sleeping = !usb;
+        Serial.printf("[weather] session idle mode: %s\n",
+                      sleeping ? "light sleep between touches" : "awake (USB present)");
+        Serial.flush();
+      }
+      if (!sleeping) {
+        delay(10);
+        continue;
+      }
+      const uint32_t idle = millis() - lastActivity;
+      const uint32_t remaining = WEATHER_TOUCH_SESSION_MS - idle;
+      const uint32_t slice = remaining < kWakeSliceMs ? remaining : kWakeSliceMs;
+      const esp_sleep_wakeup_cause_t cause = lightSleepSlice(slice);
+      if (cause == ESP_SLEEP_WAKEUP_GPIO) {
+        ++irqWakes;
+      } else {
+        ++timerWakes;
+      }
+      if (irqWakes + timerWakes <= 6) {  // a few lines prove which source fires
+        Serial.printf("[weather] light-sleep wake #%u: %s\n",
+                      static_cast<unsigned>(irqWakes + timerWakes),
+                      cause == ESP_SLEEP_WAKEUP_GPIO ? "touch irq" : "slice timer");
+        Serial.flush();
+      }
+      continue;  // re-read the controller immediately after waking
+    }
 
     if (pressed) {
       const InputManager::TouchPoint point = input.getTouchPoint();
@@ -696,8 +798,9 @@ void interactiveTouchSession() {
     }
     delay(10);
   }
-  Serial.printf("[weather] touch session over (page %u after %u ms)\n",
-                static_cast<unsigned>(pageIndex), static_cast<unsigned>(millis()));
+  Serial.printf("[weather] touch session over (page %u after %u ms; %u irq wakes, %u timer wakes)\n",
+                static_cast<unsigned>(pageIndex), static_cast<unsigned>(millis()),
+                static_cast<unsigned>(irqWakes), static_cast<unsigned>(timerWakes));
 }
 #endif
 
