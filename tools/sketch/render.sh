@@ -19,7 +19,7 @@ mkdir -p "$OUT_DIR"
 c++ -std=c++17 -O1 -Wall -Wextra \
   -I include -I "$SDK/libs/ui/FreeInkUI/include" -I "$SDK/libs/network/JsonSax/include" \
   "$SDK/libs/ui/FreeInkUI/src/FreeInkUI.cpp" \
-  src/WeatherUi.cpp src/WeatherData.cpp src/WeatherParse.cpp src/CjkGlyphSource.cpp \
+  src/WeatherUi.cpp src/WeatherData.cpp src/WeatherParse.cpp src/CityList.cpp src/CjkGlyphSource.cpp \
   "$SDK/libs/network/JsonSax/src/StreamingJsonParser.cpp" \
   tools/sketch/render_settings.cpp \
   -o "$OUT_DIR/render_settings"

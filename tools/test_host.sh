@@ -19,7 +19,7 @@ CXXFLAGS="-std=c++17 -O1 -Wall -Wextra -Werror -I include -I $SDK/libs/network/J
 echo "== parser + data model tests =="
 c++ $CXXFLAGS \
   "$SDK/libs/network/JsonSax/src/StreamingJsonParser.cpp" \
-  src/WeatherParse.cpp src/WeatherData.cpp \
+  src/WeatherParse.cpp src/CityList.cpp src/WeatherData.cpp \
   tools/preview/test_parse.cpp \
   -o "$OUT_DIR/test_parse"
 "$OUT_DIR/test_parse" tools/preview/sample_response.json

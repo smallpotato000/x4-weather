@@ -46,4 +46,9 @@ bool parseCrypto(const char* json, size_t length, CryptoBoard& out);
 // (name, country, timezone, latitude, longitude).
 bool parseGeocode(const char* json, size_t length, GeoLocation& out);
 
+// Parses up to kGeoCandidateMax results of the same response, which is what the
+// city picker shows so same-named places ("Paris" in France and in Texas) can be
+// told apart. Returns false when the response carries no usable result.
+bool parseGeoCandidates(const char* json, size_t length, GeoCandidates& out);
+
 }  // namespace weather

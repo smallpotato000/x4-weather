@@ -11,6 +11,7 @@
 #include <string>
 
 #include "WeatherData.h"
+#include "CityList.h"
 #include "WeatherParse.h"
 
 namespace {
@@ -182,6 +183,36 @@ void testRecordedGeocode(const std::string& json) {
   checkFloat(geo.longitude, 114.26667f, "longitude");
 }
 
+// The city picker shows several hits so same-named places can be told apart.
+void testGeoCandidates(const std::string& json) {
+  std::printf("recorded candidate response (%zu bytes)\n", json.size());
+  weather::GeoCandidates candidates;
+  check(weather::parseGeoCandidates(json.c_str(), json.size(), candidates), "candidates parse");
+  check(candidates.count == 5, "five candidates kept");
+  if (candidates.count < 2) return;
+
+  checkString(candidates.items[0].name, "巴黎", "candidate 0 name");
+  checkString(candidates.items[0].admin1, "法兰西岛", "candidate 0 admin1");
+  checkString(candidates.items[0].country, "法国", "candidate 0 country");
+  checkFloat(candidates.items[0].latitude, 48.85f, "candidate 0 latitude");
+  checkString(candidates.items[1].name, "Paris", "candidate 1 name");
+  checkString(candidates.items[1].admin1, "得克萨斯州", "candidate 1 admin1");
+  checkString(candidates.items[1].country, "美国", "candidate 1 country");
+
+  // The single-result API still returns the best hit.
+  weather::GeoLocation first;
+  check(weather::parseGeocode(json.c_str(), json.size(), first), "single geocode still parses");
+  checkString(first.name, "巴黎", "single geocode takes the first hit");
+
+  // The built-in shortlist the picker shows before any network use.
+  check(weather::kBuiltinCityCount == 7, "seven built-in cities");
+  checkString(weather::builtinCity(0).label, "武汉", "built-in city 0");
+  checkString(weather::builtinCity(4).label, "香港", "built-in city 4");
+  check(weather::builtinCityIndexFor("Hong Kong") == 4, "search name -> built-in index");
+  check(weather::builtinCityIndexFor("重庆") == 6, "label -> built-in index");
+  check(weather::builtinCityIndexFor("Paris") == -1, "unknown city -> -1");
+}
+
 void testLongArraysAreCapped() {
   std::printf("longer-than-layout arrays\n");
   const char* json =
@@ -258,6 +289,7 @@ int main(int argc, char** argv) {
   const char* cryptoPath = argc > 3 ? argv[3] : "tools/preview/sample_crypto.json";
   const char* btcCandlesPath = argc > 5 ? argv[5] : "tools/preview/candles_BTC.json";
   const char* geocodePath = argc > 4 ? argv[4] : "tools/preview/sample_geocode.json";
+  const char* candidatePath = argc > 6 ? argv[6] : "tools/preview/sample_geocode_candidates.json";
   bool ok = false;
   const std::string forecast = readFile(forecastPath, ok);
   if (!ok) {
@@ -284,12 +316,18 @@ int main(int argc, char** argv) {
     std::printf("error: cannot read %s (run from the project root)\n", btcCandlesPath);
     return 2;
   }
+  const std::string candidateJson = readFile(candidatePath, ok);
+  if (!ok) {
+    std::printf("error: cannot read %s (run from the project root)\n", candidatePath);
+    return 2;
+  }
 
   testRecordedForecast(forecast);
   testRecordedAirQuality(air);
   testRecordedCrypto(crypto);
   testCoinCandles(btcCandles);
   testRecordedGeocode(geocode);
+  testGeoCandidates(candidateJson);
   testLongArraysAreCapped();
   testRejectsBrokenPayloads();
 

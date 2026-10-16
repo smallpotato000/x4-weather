@@ -100,6 +100,24 @@ struct CryptoBoard {
   CoinQuote coins[kCoinCount];
 };
 
+// One geocoding search hit. admin1/country/timezone are what make two same-named
+// places distinguishable in the picker.
+static constexpr uint8_t kGeoCandidateMax = 5;
+
+struct GeoCandidate {
+  char name[32] = {0};
+  char admin1[32] = {0};
+  char country[24] = {0};
+  char timezone[32] = {0};
+  float latitude = 0.0f;
+  float longitude = 0.0f;
+};
+
+struct GeoCandidates {
+  uint8_t count = 0;
+  GeoCandidate items[kGeoCandidateMax];
+};
+
 // Geocoding result: the coordinates the forecast is actually requested for.
 struct GeoLocation {
   bool valid = false;

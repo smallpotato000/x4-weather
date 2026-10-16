@@ -48,9 +48,18 @@ struct ParseContext {
   uint16_t seriesCount = 0;
   uint8_t seriesCommitted = 0;
 
-  // Geocoding: only the first entry of `results` is wanted.
-  bool geoResultTaken = false;
+  // Geocoding: `results` is a list; each object is staged and committed so both
+  // the single-result and the candidate-list API share one parser.
+  GeoCandidates* candidates = nullptr;
+  char stagingName[32] = {0};
+  char stagingAdmin1[32] = {0};
+  char stagingCountry[24] = {0};
+  char stagingTimezone[32] = {0};
+  float stagingLatitude = 0.0f;
+  float stagingLongitude = 0.0f;
   bool geoHasCoords = false;
+  uint8_t geoCommitted = 0;
+  uint8_t geoArrayDepth = 0;  // `results` plus any nested array (postcodes, ...)
 };
 
 bool keyIs(const char* key, const char* expected) { return std::strcmp(key, expected) == 0; }
@@ -88,8 +97,17 @@ void onObjectStart(void* ctx) {
   }
 
   if (p.target == ParseContext::Target::Geo) {
-    p.section = (p.inArray && !p.geoResultTaken) ? ParseContext::Section::Current
-                                                 : ParseContext::Section::None;
+    const bool wanted = p.inArray && p.index < kGeoCandidateMax;
+    if (wanted) {
+      p.stagingName[0] = '\0';
+      p.stagingAdmin1[0] = '\0';
+      p.stagingCountry[0] = '\0';
+      p.stagingTimezone[0] = '\0';
+      p.stagingLatitude = 0.0f;
+      p.stagingLongitude = 0.0f;
+      p.geoHasCoords = false;
+    }
+    p.section = wanted ? ParseContext::Section::Current : ParseContext::Section::None;
     return;
   }
 
@@ -159,7 +177,24 @@ void onObjectEnd(void* ctx) {
   if (p.target == ParseContext::Target::Candles) return;
 
   if (p.target == ParseContext::Target::Geo && p.section == ParseContext::Section::Current) {
-    p.geoResultTaken = true;  // ignore any further results
+    // Commit this result: the parser reports how many arrived, and callers take
+    // the first (single-result API) or all of them (picker).
+    if (p.geoHasCoords && p.candidates != nullptr && p.geoCommitted < kGeoCandidateMax) {
+      GeoCandidate& candidate = p.candidates->items[p.geoCommitted];
+      copyText(p.stagingName, std::strlen(p.stagingName), candidate.name, sizeof(candidate.name));
+      copyText(p.stagingAdmin1, std::strlen(p.stagingAdmin1), candidate.admin1, sizeof(candidate.admin1));
+      copyText(p.stagingCountry, std::strlen(p.stagingCountry), candidate.country,
+               sizeof(candidate.country));
+      copyText(p.stagingTimezone, std::strlen(p.stagingTimezone), candidate.timezone,
+               sizeof(candidate.timezone));
+      candidate.latitude = p.stagingLatitude;
+      candidate.longitude = p.stagingLongitude;
+      ++p.geoCommitted;
+      p.candidates->count = p.geoCommitted;
+    }
+    p.section = ParseContext::Section::None;
+    ++p.index;
+    return;
   }
   p.section = ParseContext::Section::None;
   p.inArray = false;
@@ -184,9 +219,15 @@ void onArrayStart(void* ctx) {
   }
 
   if (p.target == ParseContext::Target::Geo) {
-    // `results` is the geocoding array; its first object is the city we want.
-    p.inArray = keyIs(p.key, "results");
-    p.index = 0;
+    if (keyIs(p.key, "results")) {
+      p.inArray = true;
+      p.index = 0;
+      p.geoArrayDepth = 1;
+    } else if (p.inArray) {
+      // A nested array inside a result (postcodes): track it so its end does not
+      // look like the end of the candidate list.
+      ++p.geoArrayDepth;
+    }
     return;
   }
   if (p.target != ParseContext::Target::Weather) return;
@@ -199,6 +240,11 @@ void onArrayStart(void* ctx) {
 
 void onArrayEnd(void* ctx) {
   ParseContext& p = *static_cast<ParseContext*>(ctx);
+
+  if (p.target == ParseContext::Target::Geo) {
+    if (p.inArray && p.geoArrayDepth > 0 && --p.geoArrayDepth == 0) p.inArray = false;
+    return;
+  }
 
   if (p.target == ParseContext::Target::Candles) {
     if (p.inCandle) {
@@ -280,10 +326,10 @@ void onNumber(void* ctx, const char* value, size_t) {
   if (p.target == ParseContext::Target::Geo) {
     if (p.section != ParseContext::Section::Current) return;
     if (keyIs(p.key, "latitude")) {
-      p.geo->latitude = number;
+      p.stagingLatitude = number;
       p.geoHasCoords = true;
     } else if (keyIs(p.key, "longitude")) {
-      p.geo->longitude = number;
+      p.stagingLongitude = number;
       p.geoHasCoords = true;
     }
     return;
@@ -372,11 +418,13 @@ void onString(void* ctx, const char* value, size_t len) {
   if (p.target == ParseContext::Target::Geo) {
     if (p.section != ParseContext::Section::Current) return;
     if (keyIs(p.key, "name")) {
-      copyText(value, len, p.geo->name, sizeof(p.geo->name));
+      copyText(value, len, p.stagingName, sizeof(p.stagingName));
+    } else if (keyIs(p.key, "admin1")) {
+      copyText(value, len, p.stagingAdmin1, sizeof(p.stagingAdmin1));
     } else if (keyIs(p.key, "country")) {
-      copyText(value, len, p.geo->country, sizeof(p.geo->country));
+      copyText(value, len, p.stagingCountry, sizeof(p.stagingCountry));
     } else if (keyIs(p.key, "timezone")) {
-      copyText(value, len, p.geo->timezone, sizeof(p.geo->timezone));
+      copyText(value, len, p.stagingTimezone, sizeof(p.stagingTimezone));
     }
     return;
   }
@@ -508,19 +556,35 @@ bool parseCrypto(const char* json, size_t length, CryptoBoard& out) {
   return true;
 }
 
-bool parseGeocode(const char* json, size_t length, GeoLocation& out) {
+bool parseGeoCandidates(const char* json, size_t length, GeoCandidates& out) {
   if (json == nullptr || length == 0) return false;
 
-  GeoLocation parsed;
+  GeoCandidates parsed;
   ParseContext ctx;
   ctx.target = ParseContext::Target::Geo;
-  ctx.geo = &parsed;
+  ctx.candidates = &parsed;
 
   StreamingJsonParser parser(makeCallbacks(ctx));
   parser.feed(json, length);
 
-  if (parser.hasError() || !ctx.geoResultTaken || !ctx.geoHasCoords) return false;
+  if (parser.hasError() || parsed.count == 0) return false;
 
+  out = parsed;
+  return true;
+}
+
+bool parseGeocode(const char* json, size_t length, GeoLocation& out) {
+  GeoCandidates candidates;
+  if (!parseGeoCandidates(json, length, candidates) || candidates.count == 0) return false;
+
+  // The forecast request only needs the best hit; the picker uses the full list.
+  const GeoCandidate& first = candidates.items[0];
+  GeoLocation parsed;
+  copyText(first.name, std::strlen(first.name), parsed.name, sizeof(parsed.name));
+  copyText(first.country, std::strlen(first.country), parsed.country, sizeof(parsed.country));
+  copyText(first.timezone, std::strlen(first.timezone), parsed.timezone, sizeof(parsed.timezone));
+  parsed.latitude = first.latitude;
+  parsed.longitude = first.longitude;
   parsed.valid = true;
   out = parsed;
   return true;
