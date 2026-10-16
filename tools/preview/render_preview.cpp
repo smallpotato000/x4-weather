@@ -254,10 +254,12 @@ bool renderSettingsVariant(const char* pageName, const char* out) {
   state.batteryKnown = true;
   if (screen == weather::SettingsScreen::Password) {
     state.editing = settings.wifiPassword;
+    state.secret = true;  // the flow masks the field; the preview must too
     state.status = "密码错误，请再试一次";
   }
   if (screen == weather::SettingsScreen::CitySearch) {
     state.editing = "Paris";
+    state.primaryLabel = "搜索";
   }
   if (screen == weather::SettingsScreen::CityHits) {
     state.editing = "Paris";

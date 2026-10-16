@@ -423,13 +423,19 @@ void drawCryptoPage(DrawTarget& target, const ScreenState& state) {
     return;
   }
 
-  // Row order: table, gainers first or losers first. Coins without a quote keep
-  // their table position at the end.
+  // Only the coins the user kept visible take part in ordering and drawing.
   uint8_t order[kCoinCount];
-  for (uint8_t i = 0; i < kCoinCount; ++i) order[i] = i;
+  uint8_t visible = 0;
+  for (uint8_t i = 0; i < kCoinCount; ++i) {
+    if ((state.coinMask & (1u << i)) != 0) order[visible++] = i;
+  }
+  if (visible == 0) {  // never leave the page blank
+    for (uint8_t i = 0; i < kCoinCount; ++i) order[i] = i;
+    visible = kCoinCount;
+  }
   if (state.cryptoSort != CryptoSort::Table) {
     const bool descending = state.cryptoSort == CryptoSort::Gainers;
-    for (uint8_t i = 1; i < kCoinCount; ++i) {
+    for (uint8_t i = 1; i < visible; ++i) {
       const uint8_t current = order[i];
       const CoinQuote& quote = report.crypto.coins[current];
       int8_t j = static_cast<int8_t>(i - 1);
@@ -446,7 +452,7 @@ void drawCryptoPage(DrawTarget& target, const ScreenState& state) {
     }
   }
 
-  for (uint8_t row = 0; row < kCoinCount; ++row) {
+  for (uint8_t row = 0; row < visible; ++row) {
     const uint8_t i = order[row];
     const CoinInfo& info = coinInfo(i);
     const CoinQuote& quote = report.crypto.coins[i];

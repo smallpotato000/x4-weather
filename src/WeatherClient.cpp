@@ -245,6 +245,28 @@ bool WeatherClient::fetchCrypto(CryptoBoard& out) {
   return true;
 }
 
+bool WeatherClient::fetchGeoCandidates(const char* city, GeoCandidates& out) {
+  lastError_ = "";
+  if (WiFi.status() != WL_CONNECTED) {
+    lastError_ = "WiFi not connected";
+    return false;
+  }
+
+  String url = "https://geocoding-api.open-meteo.com/v1/search?count=5&language=zh&format=json&name=";
+  url += urlEncode(city);
+
+  String payload;
+  if (!httpGet(url, payload)) return false;
+
+  GeoCandidates parsed;
+  if (!parseGeoCandidates(payload.c_str(), payload.length(), parsed)) {
+    lastError_ = "city not found";
+    return false;
+  }
+  out = parsed;
+  return true;
+}
+
 bool WeatherClient::fetchGeocode(const char* city, GeoLocation& out) {
   lastError_ = "";
   if (WiFi.status() != WL_CONNECTED) {

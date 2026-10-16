@@ -58,6 +58,10 @@ class WeatherClient {
   // is percent-encoded, so non-ASCII city names work.
   bool fetchGeocode(const char* city, GeoLocation& out);
 
+  // Same request, but keeps every hit so the city picker can tell same-named
+  // places apart.
+  bool fetchGeoCandidates(const char* city, GeoCandidates& out);
+
   // Point the forecast requests at resolved coordinates.
   void setCoordinates(float latitude, float longitude) {
     config_.latitude = latitude;

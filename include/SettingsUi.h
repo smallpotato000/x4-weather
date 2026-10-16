@@ -48,6 +48,8 @@ struct SettingsUiState {
   const char* editing = nullptr;           // password or city query buffer
   bool secret = false;                     // mask `editing` (password)
   bool revealed = false;                   // "显示" toggle
+  bool editingSsid = false;                // the field edits the network name
+  const char* primaryLabel = "连接";        // bottom-right key caption
   uint8_t selectedRow = 0;                 // highlighted row
   bool confirmPowerOff = false;            // first tap on 关机 already happened
   uint8_t batteryPercent = 82;

@@ -295,12 +295,15 @@ void drawKeyboard(DrawTarget& t, const char* primaryLabel) {
 }
 
 void drawPassword(DrawTarget& t, const SettingsUiState& state) {
-  header(t, state, state.settings->wifiSsid[0] != '\0' ? state.settings->wifiSsid : "输入密码");
+  const char* title = state.editingSsid
+                          ? "输入网络名"
+                          : (state.settings->wifiSsid[0] != '\0' ? state.settings->wifiSsid : "输入密码");
+  header(t, state, title);
 
   const Rect field{L::margin, 140, static_cast<int16_t>(L::width - L::margin * 2), 76};
   t.stroke(field, kInk, 3, 8);
   const char* text0 = state.editing != nullptr ? state.editing : "";
-  if (state.revealed) {
+  if (!state.secret || state.revealed) {
     heading(t, static_cast<int16_t>(field.x + 16), static_cast<int16_t>(field.y + 52), text0,
             TextAlign::Left, 300);
   } else {
@@ -311,11 +314,13 @@ void drawPassword(DrawTarget& t, const SettingsUiState& state) {
              kInk, 6);
     }
   }
-  t.line(Point{static_cast<int16_t>(L::rightEdge - 96), field.y},
-         Point{static_cast<int16_t>(L::rightEdge - 96), static_cast<int16_t>(field.y + field.height)}, 2,
-         kInk);
-  body(t, static_cast<int16_t>(L::rightEdge - 80), static_cast<int16_t>(field.y + 50),
-       state.revealed ? "隐藏" : "显示", TextAlign::Center, 64);
+  if (state.secret) {
+    t.line(Point{static_cast<int16_t>(L::rightEdge - 96), field.y},
+           Point{static_cast<int16_t>(L::rightEdge - 96), static_cast<int16_t>(field.y + field.height)}, 2,
+           kInk);
+    body(t, static_cast<int16_t>(L::rightEdge - 80), static_cast<int16_t>(field.y + 50),
+         state.revealed ? "隐藏" : "显示", TextAlign::Center, 64);
+  }
 
   if (state.status != nullptr) {
     const Rect strip{L::margin, 236, static_cast<int16_t>(L::width - L::margin * 2), 58};
@@ -323,10 +328,11 @@ void drawPassword(DrawTarget& t, const SettingsUiState& state) {
     body(t, strip.x, static_cast<int16_t>(strip.y + 40), state.status, TextAlign::Center, strip.width,
          Color::White);
   } else {
-    body(t, L::margin, 274, "点「显示」可以核对输入的密码", TextAlign::Left, 340);
+    body(t, L::margin, 274, state.editingSsid ? "输入要连接的 WiFi 名称" : "点「显示」可以核对输入的密码",
+         TextAlign::Left, 400);
   }
 
-  drawKeyboard(t, "连接");
+  drawKeyboard(t, state.primaryLabel != nullptr ? state.primaryLabel : "连接");
   footer(t, "点上面的网络可以重选", "连上后自动返回");
 }
 
@@ -372,7 +378,7 @@ void drawCitySearch(DrawTarget& t, const SettingsUiState& state) {
     body(t, L::margin, 262, "城市名用拼音或英文，同名城市会出现候选", TextAlign::Left, 460);
   }
 
-  drawKeyboard(t, "搜索");
+  drawKeyboard(t, state.primaryLabel != nullptr ? state.primaryLabel : "搜索");
   footer(t, "点候选选定", "中文名也可");
 }
 

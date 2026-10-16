@@ -46,6 +46,7 @@ struct ScreenState {
   CryptoSort cryptoSort = CryptoSort::Table;  // row order on the crypto page
   bool batteryKnown = false;     // header battery: read from the board's ADC
   uint8_t batteryPercent = 0;
+  uint8_t coinMask = 0x7F;       // bit i = draw coin i (settings-driven)
   const char* hint = nullptr;    // footer hint; defaults to the paging hint
   bool busy = false;             // first fetch in flight -> placeholder screen
   bool interactive = false;      // buttons are live -> show the paging hint

@@ -32,7 +32,9 @@
 
 #include "CjkGlyphSource.h"
 #include "ScaledDrawTarget.h"
+#include "SettingsFlow.h"
 #include "SettingsStore.h"
+#include "TouchIdle.h"
 #include "WeatherClient.h"
 #include "WeatherUi.h"
 #include "config.h"
@@ -114,6 +116,9 @@ char statusLine[64] = {0};
 char displayPlace[32] = {0};  // header label: config name, else the geocoded one
 weather::GeoLocation location;
 weather::Settings settings;  // compile-time defaults overlaid with NVS
+#if FREEINK_DEVICE_PAPERS3
+weather::WifiList wifiNetworks;  // last scan, drawn by the settings UI
+#endif
 bool haveReport = false;
 bool batteryKnown = false;
 uint8_t batteryPercent = 0;
@@ -158,6 +163,7 @@ void paint(EInkDisplay::RefreshMode mode) {
   state.cryptoSort = static_cast<weather::CryptoSort>(cryptoSortIndex);
   state.batteryKnown = batteryKnown;
   state.batteryPercent = batteryPercent;
+  state.coinMask = settings.coinMask;
   char hintLine[40];
   if (page == weather::Page::Crypto) {
     // On the crypto page up/down re-order the rows instead of paging.
@@ -268,6 +274,13 @@ void applyLocation() {
   } else {
     snprintf(displayPlace, sizeof(displayPlace), "天气");
   }
+}
+
+// Drops the RTC-geocoded coordinates so the next cycle resolves them again (the
+// settings UI calls this after the user picks a different city).
+void forgetLocationCache() {
+  location = weather::GeoLocation{};
+  locationMagic = 0;
 }
 
 // Resolve WEATHER_CITY to coordinates once and keep them in RTC memory; falls
@@ -596,76 +609,19 @@ void interactiveSession(int initialButton) {
 
 
 #if FREEINK_DEVICE_PAPERS3
-// Sleep in slices with the GT911 interrupt armed. The PaperS3's touch IRQ is
-// GPIO48, which is not an RTC IO (so it cannot wake deep sleep) but light sleep's
-// GPIO wake works on any pin -- the same trick M5Unified uses. A one-second
-// safety timer keeps the loop alive even if the IRQ line never asserts.
-constexpr uint32_t kWakeSliceMs = 1000;
-
-// The USB-Serial-JTAG link does not survive light sleep, so sleeping between
-// touches would take the log with it. While USB power is present (bench work,
-// flashing) the session therefore stays awake; on battery it sleeps.
-//
-// Two independent sources, because the profile's usbDetect polarity is worth
-// verifying per unit: GPIO5 (profile says HIGH = USB present) read with a
-// pull-up, or the charger telling us it is charging. The first call logs all
-// three pull states so the polarity is visible in the log.
-bool usbPowerPresent() {
-  const int8_t pin = BoardConfig::ACTIVE.usbDetect;
-  static bool logged = false;
-  bool pinSaysYes = false;
-  if (pin >= 0) {
-    pinMode(pin, INPUT);
-    const int floating = digitalRead(pin);
-    pinMode(pin, INPUT_PULLUP);
-    const int pulledUp = digitalRead(pin);
-    pinMode(pin, INPUT_PULLDOWN);
-    const int pulledDown = digitalRead(pin);
-    if (!logged) {
-      logged = true;
-      Serial.printf("[weather] usbDetect GPIO%d: floating=%d pullup=%d pulldown=%d\n", pin, floating,
-                    pulledUp, pulledDown);
-    }
-    pinMode(pin, INPUT_PULLUP);
-    // Measured on this hardware: the pin is actively driven LOW while USB is
-    // attached (floating/pull-up/pull-down all read 0 with the cable in), so the
-    // profile's "HIGH = USB present" comment is inverted for PaperS3. Charging is
-    // kept as a second vote, but it cannot be the only one: a full battery stops
-    // charging while the cable stays plugged in.
-    pinSaysYes = digitalRead(pin) == LOW;
-  }
-  const bool charging = batteryMonitor.isCharging();
-  return pinSaysYes || charging;
-}
-
-esp_sleep_wakeup_cause_t lightSleepSlice(uint32_t ms) {
-  if (ms == 0) return ESP_SLEEP_WAKEUP_UNDEFINED;
-  esp_sleep_enable_timer_wakeup(static_cast<uint64_t>(ms) * 1000ULL);
-
-  const int8_t irq = BoardConfig::ACTIVE.touch.irq;
-  if (irq >= 0) {
-    const gpio_num_t pin = static_cast<gpio_num_t>(irq);
-    gpio_wakeup_enable(pin, BoardConfig::ACTIVE.touch.irqActiveLow ? GPIO_INTR_LOW_LEVEL
-                                                                  : GPIO_INTR_HIGH_LEVEL);
-    esp_sleep_enable_gpio_wakeup();
-  }
-  esp_light_sleep_start();
-  if (irq >= 0) {
-    gpio_wakeup_disable(static_cast<gpio_num_t>(irq));
-  }
-  return esp_sleep_get_wakeup_cause();
-}
-
 // Touch session. The PaperS3 has no readable buttons at all, so every wake ends
 // with a window like this one: taps and swipes drive exactly the actions the
 // X4's keys drive, and the window closes after WEATHER_TOUCH_SESSION_MS of
 // silence. (A light-sleep variant with touch-to-wake is the next step; this
 // version stays awake, which costs about what an X4 button session costs.)
-void interactiveTouchSession() {
+enum class TouchSessionResult : uint8_t { Sleep, Settings };
+
+// Touch session. A tap on the header strip hands over to the settings UI.
+TouchSessionResult interactiveTouchSession() {
   refreshBattery();
   pageIndex = static_cast<uint8_t>(page);
   client.endWifi();  // the window is touch-only; page data is already cached
-  bool sleeping = !usbPowerPresent();  // current idle mode, re-checked every slice
+  bool sleeping = !weather::usbPowerPresent();  // current idle mode, re-checked per slice
   Serial.printf("[weather] touch session (%u ms idle timeout, page %u, %s)\n",
                 static_cast<unsigned>(WEATHER_TOUCH_SESSION_MS), static_cast<unsigned>(pageIndex),
                 sleeping ? "light sleep between touches" : "awake: USB present");
@@ -692,7 +648,7 @@ void interactiveTouchSession() {
       // USB on the bench means the log matters more than the microamps; on
       // battery the session sleeps between touches. Checked every slice so
       // unplugging (or plugging) switches modes without a reboot.
-      const bool usb = usbPowerPresent();
+      const bool usb = weather::usbPowerPresent();
       if (usb != !sleeping) {
         sleeping = !usb;
         Serial.printf("[weather] session idle mode: %s\n",
@@ -705,8 +661,9 @@ void interactiveTouchSession() {
       }
       const uint32_t idle = millis() - lastActivity;
       const uint32_t remaining = WEATHER_TOUCH_SESSION_MS - idle;
-      const uint32_t slice = remaining < kWakeSliceMs ? remaining : kWakeSliceMs;
-      const esp_sleep_wakeup_cause_t cause = lightSleepSlice(slice);
+      const uint32_t slice =
+          remaining < weather::kWakeSliceMs ? remaining : weather::kWakeSliceMs;
+      const esp_sleep_wakeup_cause_t cause = weather::lightSleepSlice(slice);
       if (cause == ESP_SLEEP_WAKEUP_GPIO) {
         ++irqWakes;
       } else {
@@ -780,7 +737,12 @@ void interactiveTouchSession() {
         page = dx < 0 ? weather::nextPage(page) : weather::previousPage(page);
         repaint = true;
       } else {
-        // Tap: the bottom strip closes the session, the halves page.
+        // Tap: header strip opens settings, bottom strip closes the session, the
+        // halves page.
+        if (logical.y < 104) {
+          Serial.println("[weather] header tap: opening settings");
+          return TouchSessionResult::Settings;
+        }
         if (logical.y > logicalHeight - 80) {
           Serial.printf("[weather] bottom tap at logical (%d,%d): closing the session\n",
                         static_cast<int>(logical.x), static_cast<int>(logical.y));
@@ -807,6 +769,7 @@ void interactiveTouchSession() {
   Serial.printf("[weather] touch session over (page %u after %u ms; %u irq wakes, %u timer wakes)\n",
                 static_cast<unsigned>(pageIndex), static_cast<unsigned>(millis()),
                 static_cast<unsigned>(irqWakes), static_cast<unsigned>(timerWakes));
+  return TouchSessionResult::Sleep;
 }
 #endif
 
@@ -901,7 +864,33 @@ void setup() {
 #if FREEINK_DEVICE_PAPERS3
   // There are no readable buttons on the PaperS3, so every wake opens a touch
   // window: the panel is already showing fresh data, and taps land immediately.
-  interactiveTouchSession();
+  // A header tap hands over to the settings UI, which returns back here.
+  for (;;) {
+    if (interactiveTouchSession() != TouchSessionResult::Settings) break;
+
+    weather::SettingsFlowContext flow;
+    flow.input = &input;
+    flow.display = &display;
+    flow.target = target;
+    flow.client = &client;
+    flow.settings = &settings;
+    flow.networks = &wifiNetworks;
+    flow.batteryKnown = batteryKnown;
+    flow.batteryPercent = batteryPercent;
+    flow.hooks.applyLocation = &applyLocation;
+    flow.hooks.forgetLocationCache = &forgetLocationCache;
+    flow.hooks.powerOff = &powerOff;
+    weather::runSettingsSession(flow);
+    batteryKnown = flow.batteryKnown;
+    batteryPercent = flow.batteryPercent;
+
+    // Back to the data pages: apply whatever the user changed and repaint.
+    client.setCredentials(settings.wifiSsid, settings.wifiPassword);
+    client.setPlace(settings.place);
+    pageIndex = static_cast<uint8_t>(page);
+    refreshBattery();
+    paint(EInkDisplay::FULL_REFRESH);
+  }
 #elif WEATHER_INTERACTIVE_SECONDS > 0
   // A power-key wake goes straight into the session; a timer wake waits a moment
   // in case someone is pressing a key right then.
