@@ -111,11 +111,21 @@ int rowAt(const Point& p, int16_t top, int16_t rowHeight, uint8_t count) {
 }
 
 bool headerBackTapped(const Point& p) { return p.x < 80 && p.y < L::headerBottom; }
+
+void changeWifiPage(int8_t delta) {
+  const uint8_t pages = settingsWifiPageCount(g->networks->count);
+  int page = static_cast<int>(ui.wifiPage) + delta;
+  if (page < 0) page = pages - 1;
+  if (page >= pages) page = 0;
+  ui.wifiPage = static_cast<uint8_t>(page);
+  repaint(true);
+}
 bool headerActionTapped(const Point& p) { return p.x > L::rightEdge - 170 && p.y < L::headerBottom; }
 
 // --- WiFi -------------------------------------------------------------------
 
 void scanWifi() {
+  ui.wifiPage = 0;
   setStatus("正在扫描附近网络…");
   repaint(true);
 
@@ -249,45 +259,15 @@ void runCitySearch() {
 
 // --- keyboard ---------------------------------------------------------------
 
-enum class KeyKind : uint8_t { None, Letter, Shift, Delete, Mode, Space, Primary };
-
-struct KeyHit {
-  KeyKind kind = KeyKind::None;
-  char letter = 0;
-};
-
-KeyHit hitKeyboard(const Point& p) {
-  const int16_t rowHeightTotal = static_cast<int16_t>(L::keyHeight + 10);
-  for (uint8_t row = 0; row < 3; ++row) {
-    const int16_t y = static_cast<int16_t>(L::keyboardTop + row * rowHeightTotal);
-    if (p.y < y || p.y >= y + L::keyHeight) continue;
-    const int16_t rowX = static_cast<int16_t>(L::keyX0 + (row == 1 ? 25 : (row == 2 ? 50 : 0)));
-    const uint8_t letters = row == 0 ? 10 : (row == 1 ? 9 : 7);
-    for (uint8_t i = 0; i < letters; ++i) {
-      const int16_t x = static_cast<int16_t>(rowX + i * (L::keyWide + L::keyGap));
-      if (inside(p, x, y, L::keyWide, L::keyHeight)) {
-        const char* rows[3] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
-        return KeyHit{KeyKind::Letter, rows[row][i]};
-      }
-    }
-    if (row == 2) {
-      if (inside(p, L::keyX0, y, 64, L::keyHeight)) return KeyHit{KeyKind::Shift, 0};
-      const int16_t delX =
-          static_cast<int16_t>(L::keyX0 + 64 + L::keyGap + 7 * (L::keyWide + L::keyGap) + L::keyGap);
-      if (inside(p, delX, y, 64, L::keyHeight)) return KeyHit{KeyKind::Delete, 0};
-    }
+// Hit test over the same key rects the drawing uses.
+const SettingsKey* hitKeyboard(const Point& p, uint8_t layer) {
+  static SettingsKey keys[kKeyboardKeyMax];
+  const uint8_t count = settingsLayoutKeys(layer, " ", keys, kKeyboardKeyMax);
+  for (uint8_t i = 0; i < count; ++i) {
+    const Rect& r = keys[i].rect;
+    if (p.x >= r.x && p.x < r.x + r.width && p.y >= r.y && p.y < r.y + r.height) return &keys[i];
   }
-
-  const int16_t bottomY = static_cast<int16_t>(L::keyboardTop + 3 * rowHeightTotal);
-  if (p.y >= bottomY && p.y < bottomY + L::keyHeight) {
-    if (inside(p, L::keyX0, bottomY, 80, L::keyHeight)) return KeyHit{KeyKind::Mode, 0};
-    if (inside(p, static_cast<int16_t>(L::keyX0 + 80 + L::keyGap), bottomY, 250, L::keyHeight)) {
-      return KeyHit{KeyKind::Space, 0};
-    }
-    const int16_t primaryX = static_cast<int16_t>(L::keyX0 + 80 + L::keyGap + 250 + L::keyGap);
-    if (inside(p, primaryX, bottomY, 150, L::keyHeight)) return KeyHit{KeyKind::Primary, 0};
-  }
-  return KeyHit{};
+  return nullptr;
 }
 
 void appendChar(char* buffer, size_t capacity, char c) {
@@ -301,6 +281,30 @@ void backspace(char* buffer) {
   const size_t length = std::strlen(buffer);
   if (length == 0) return;
   buffer[length - 1] = '\0';
+}
+
+// Applies a key to a text buffer. Returns false when the key is the primary
+// action, which each screen handles itself (connect / search / next).
+bool applyEditKey(const SettingsKey& key, char* buffer, size_t capacity) {
+  switch (key.action) {
+    case SettingsKeyAction::Character:
+      appendChar(buffer, capacity, key.output);
+      return true;
+    case SettingsKeyAction::Space:
+      appendChar(buffer, capacity, ' ');
+      return true;
+    case SettingsKeyAction::Delete:
+      backspace(buffer);
+      return true;
+    case SettingsKeyAction::Shift:
+      if (ui.keyboardLayer != 2) ui.keyboardLayer = ui.keyboardLayer == 1 ? 0 : 1;
+      return true;
+    case SettingsKeyAction::Mode:
+      ui.keyboardLayer = ui.keyboardLayer == 2 ? 0 : 2;
+      return true;
+    default:
+      return false;
+  }
 }
 
 // --- screen handlers --------------------------------------------------------
@@ -357,12 +361,16 @@ void handleWifi(const Point& p) {
     return;
   }
   const WifiList& list = *g->networks;
-  const int row = rowAt(p, L::rowsTop, L::rowHeight, static_cast<uint8_t>(list.count + 1));
+  const uint8_t first = static_cast<uint8_t>(ui.wifiPage * kWifiRowsPerPage);
+  const uint8_t remaining = list.count > first ? static_cast<uint8_t>(list.count - first) : 0;
+  const uint8_t onPage = remaining < kWifiRowsPerPage ? remaining : kWifiRowsPerPage;
+
+  const int row = rowAt(p, L::rowsTop, L::rowHeight, static_cast<uint8_t>(onPage + 1));
   if (row < 0) {
     repaint();
     return;
   }
-  if (row == list.count) {  // manual entry
+  if (row == onPage) {  // manual entry
     ssidBuffer[0] = '\0';
     passwordBuffer[0] = '\0';
     ui.editingSsid = true;
@@ -370,7 +378,7 @@ void handleWifi(const Point& p) {
     return;
   }
 
-  const WifiEntry& entry = list.items[row];
+  const WifiEntry& entry = list.items[first + row];
   Serial.printf("[settings] wifi row %d: %s%s\n", row, entry.ssid, entry.secure ? " (locked)" : " (open)");
   std::snprintf(ssidBuffer, sizeof(ssidBuffer), "%s", entry.ssid);
   passwordBuffer[0] = '\0';
@@ -390,36 +398,24 @@ void handlePassword(const Point& p) {
     return;
   }
 
-  const KeyHit key = hitKeyboard(p);
+  const SettingsKey* key = hitKeyboard(p, ui.keyboardLayer);
+  if (key == nullptr) {
+    repaint();
+    return;
+  }
   char* buffer = ui.editingSsid ? ssidBuffer : passwordBuffer;
   const size_t capacity = ui.editingSsid ? sizeof(ssidBuffer) : sizeof(passwordBuffer);
-  switch (key.kind) {
-    case KeyKind::Letter:
-      appendChar(buffer, capacity, key.letter);
-      break;
-    case KeyKind::Space:
-      appendChar(buffer, capacity, ' ');
-      break;
-    case KeyKind::Delete:
-      backspace(buffer);
-      break;
-    case KeyKind::Shift:
-    case KeyKind::Mode:
-      break;  // the symbol/shift layers are a later nicety; the list covers most SSIDs
-    case KeyKind::Primary:
-      if (ui.editingSsid) {
-        if (ssidBuffer[0] == '\0') {
-          setStatus("网络名不能为空");
-        } else {
-          ui.editingSsid = false;
-          clearStatus();
-        }
+  if (!applyEditKey(*key, buffer, capacity)) {  // primary key
+    if (ui.editingSsid) {
+      if (ssidBuffer[0] == '\0') {
+        setStatus("网络名不能为空");
       } else {
-        connectWifi(ssidBuffer[0] != '\0' ? ssidBuffer : g->settings->wifiSsid, passwordBuffer);
+        ui.editingSsid = false;
+        clearStatus();
       }
-      break;
-    default:
-      return;
+    } else {
+      connectWifi(ssidBuffer[0] != '\0' ? ssidBuffer : g->settings->wifiSsid, passwordBuffer);
+    }
   }
   repaint();
 }
@@ -448,22 +444,14 @@ void handleCitySearch(const Point& p) {
     return;
   }
 
-  const KeyHit key = hitKeyboard(p);
-  switch (key.kind) {
-    case KeyKind::Letter:
-      appendChar(cityQuery, sizeof(cityQuery), key.letter);
-      break;
-    case KeyKind::Space:
-      appendChar(cityQuery, sizeof(cityQuery), ' ');
-      break;
-    case KeyKind::Delete:
-      backspace(cityQuery);
-      break;
-    case KeyKind::Primary:
-      runCitySearch();
-      return;
-    default:
-      return;
+  const SettingsKey* key = hitKeyboard(p, ui.keyboardLayer);
+  if (key == nullptr) {
+    repaint();
+    return;
+  }
+  if (!applyEditKey(*key, cityQuery, sizeof(cityQuery))) {
+    runCitySearch();
+    return;
   }
   repaint();
 }
@@ -482,16 +470,21 @@ void handleCityHits(const Point& p) {
 
 void handleCoins(const Point& p) {
   const int row = rowAt(p, L::rowsTop, 92, kCoinCount);
+  Settings& settings = *g->settings;
+  Serial.printf("[settings] coins tap (%d,%d) -> row %d, mask 0x%02X (%u visible)\n",
+                static_cast<int>(p.x), static_cast<int>(p.y), row,
+                static_cast<unsigned>(settings.coinMask),
+                static_cast<unsigned>(settingsVisibleCoins(settings.coinMask)));
   if (row < 0) {
     repaint();
     return;
   }
-  Settings& settings = *g->settings;
   const uint8_t bit = static_cast<uint8_t>(1u << row);
   const bool on = (settings.coinMask & bit) != 0;
   if (on && settingsVisibleCoins(settings.coinMask) <= 4) {
+    Serial.println("[settings] coin toggle refused: at least 4 must stay visible");
     setStatus("至少保留 4 个币");
-    repaint();
+    repaint(true);
     return;
   }
   settings.coinMask = on ? static_cast<uint8_t>(settings.coinMask & ~bit)
@@ -626,6 +619,12 @@ void runSettingsSession(SettingsFlowContext& context) {
         Serial.flush();
         if (context.hooks.powerOff != nullptr) context.hooks.powerOff();
         return;
+      }
+
+      // A vertical swipe pages the WiFi list; other screens ignore swipes.
+      if (ui.screen == SettingsScreen::Wifi && absDy > 60 && absDy > absDx) {
+        changeWifiPage(dy < 0 ? 1 : -1);
+        continue;
       }
 
       if (headerBackTapped(logical)) {

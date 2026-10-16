@@ -164,8 +164,9 @@ weather::WifiList demoNetworks() {
     bool secure;
   };
   const Row rows[] = {
-      {"home-wifi", -52, true},   {"M5-PaperS3", -58, true},  {"Xiaomi_AX3000", -71, true},
+      {"home-wifi", -52, true},     {"M5-PaperS3", -58, true},  {"Xiaomi_AX3000", -71, true},
       {"ChinaNet-8fZq", -76, true}, {"CMCC-Guest", -80, false}, {"TP-LINK_2.4G", -88, true},
+      {"HUAWEI-5G", -63, true},     {"XfinityWifi", -84, false}, {"NETGEAR_guest", -90, true},
   };
   for (const Row& row : rows) {
     weather::WifiEntry& entry = list.items[list.count++];
@@ -215,6 +216,7 @@ bool renderSettingsVariant(const char* pageName, const char* out) {
       {"settings", weather::SettingsScreen::Home},
       {"settings-wifi", weather::SettingsScreen::Wifi},
       {"settings-password", weather::SettingsScreen::Password},
+      {"settings-password-digits", weather::SettingsScreen::Password},
       {"settings-city", weather::SettingsScreen::City},
       {"settings-city-search", weather::SettingsScreen::CitySearch},
       {"settings-city-hits", weather::SettingsScreen::CityHits},
@@ -263,10 +265,19 @@ bool renderSettingsVariant(const char* pageName, const char* out) {
   state.candidates = &candidates;
   state.batteryPercent = 82;
   state.batteryKnown = true;
+  if (screen == weather::SettingsScreen::Wifi) {
+    state.status = "扫描到 6 个网络";  // the footer's inverted status slot
+  }
+  if (screen == weather::SettingsScreen::Coins) {
+    state.status = "至少保留 4 个币";
+  }
   if (screen == weather::SettingsScreen::Password) {
     state.editing = settings.wifiPassword;
     state.secret = true;  // the flow masks the field; the preview must too
     state.status = "密码错误，请再试一次";
+    if (std::strcmp(pageName, "settings-password-digits") == 0) {
+      state.keyboardLayer = 2;  // the 123 layer: numeric passwords live here
+    }
   }
   if (screen == weather::SettingsScreen::CitySearch) {
     state.editing = "Paris";

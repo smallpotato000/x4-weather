@@ -51,6 +51,8 @@ struct SettingsUiState {
   bool editingSsid = false;                // the field edits the network name
   const char* primaryLabel = "连接";        // bottom-right key caption
   uint8_t selectedRow = 0;                 // highlighted row
+  uint8_t keyboardLayer = 0;               // 0 lower, 1 upper, 2 digits/symbols
+  uint8_t wifiPage = 0;                    // WiFi list is paged, not scrolled
   bool confirmPowerOff = false;            // first tap on 关机 already happened
   uint8_t batteryPercent = 82;
   bool batteryKnown = true;
@@ -58,6 +60,38 @@ struct SettingsUiState {
 
 // Draws one whole screen. The caller owns the panel refresh.
 void renderSettingsScreen(freeink::ui::DrawTarget& target, const SettingsUiState& state);
+
+// Keyboard layers: 0 lower, 1 upper, 2 digits/symbols. Layer 2 is what makes
+// numeric WiFi passwords possible at all.
+static constexpr uint8_t kKeyboardLayers = 3;
+
+// What a key does when tapped.
+enum class SettingsKeyAction : uint8_t {
+  None,     // nothing drawn here (a gap)
+  Character,
+  Shift,
+  Delete,
+  Mode,    // letters <-> digits
+  Space,
+  Primary, // 连接 / 搜索 / 下一步
+};
+
+// One placed key. The drawing and the flow's hit testing both consume this list,
+// so a tap can never disagree with the glyph under the finger (two hand-written
+// copies of the row arithmetic did disagree on the wider digit layer).
+struct SettingsKey {
+  freeink::ui::Rect rect{};
+  const char* label = nullptr;
+  char output = 0;
+  SettingsKeyAction action = SettingsKeyAction::None;
+};
+
+static constexpr uint8_t kKeyboardKeyMax = 40;
+uint8_t settingsLayoutKeys(uint8_t layer, const char* primaryLabel, SettingsKey* out, uint8_t capacity);
+
+// WiFi list paging.
+static constexpr uint8_t kWifiRowsPerPage = 6;
+uint8_t settingsWifiPageCount(uint8_t networkCount);
 
 // Labels shared with the flow.
 const char* settingsRefreshLabel(uint16_t minutes);

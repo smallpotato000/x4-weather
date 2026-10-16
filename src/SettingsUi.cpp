@@ -153,8 +153,20 @@ void header(DrawTarget& t, const SettingsUiState& state, const char* title, cons
   }
 }
 
-void footer(DrawTarget& t, const char* left, const char* right = nullptr) {
-  body(t, L::margin, L::footerBaseline, left, TextAlign::Left, 270);
+// Footer with a status slot: when the flow has something to say ("正在扫描…",
+// "密码错误，请再试一次", "至少保留 4 个币") it replaces the left hint in an
+// inverted strip, so every screen can report what just happened. Without this the
+// status was set but never drawn on most screens.
+void footer(DrawTarget& t, const SettingsUiState& state, const char* left,
+            const char* right = nullptr, bool showStatus = true) {
+  if (showStatus && state.status != nullptr) {
+    const Rect strip{static_cast<int16_t>(L::margin - 6), static_cast<int16_t>(L::footerBaseline - 34),
+                     300, 46};
+    t.fill(strip, kInk, 6);
+    body(t, L::margin, L::footerBaseline, state.status, TextAlign::Left, 288, Color::White);
+  } else {
+    body(t, L::margin, L::footerBaseline, left, TextAlign::Left, 270);
+  }
   if (right != nullptr) {
     body(t, L::rightEdge - 230, L::footerBaseline, right, TextAlign::Right, 230);
   }
@@ -218,7 +230,7 @@ void drawHome(DrawTarget& t, const SettingsUiState& state) {
        state.confirmPowerOff ? "再点一次确认关机" : "关机", TextAlign::Center, power.width,
        state.confirmPowerOff ? Color::White : Color::Black);
 
-  footer(t, "点一行修改", "30 秒无操作退出");
+  footer(t, state, "点一行修改", "60 秒无操作退出");
 }
 
 void drawWifi(DrawTarget& t, const SettingsUiState& state) {
@@ -231,9 +243,15 @@ void drawWifi(DrawTarget& t, const SettingsUiState& state) {
     body(t, 0, 452, "点右上角「重新扫描」", TextAlign::Center, L::width);
   }
 
+  const uint8_t pageCount = settingsWifiPageCount(list.count);
+  const uint8_t page = state.wifiPage < pageCount ? state.wifiPage : 0;
+  const uint8_t first = static_cast<uint8_t>(page * kWifiRowsPerPage);
+  uint8_t drawn = 0;
+
   int16_t top = L::rowsTop;
-  for (uint8_t i = 0; i < list.count && i < kWifiListMax; ++i) {
+  for (uint8_t i = first; i < list.count && i < first + kWifiRowsPerPage; ++i) {
     const WifiEntry& entry = list.items[i];
+    ++drawn;
     const bool current = s.wifiSsid[0] != '\0' && std::strcmp(entry.ssid, s.wifiSsid) == 0;
     const Color color = current ? Color::White : Color::Black;
     if (current) t.fill(Rect{0, top, L::width, L::rowHeight - 4}, kInk);
@@ -262,36 +280,27 @@ void drawWifi(DrawTarget& t, const SettingsUiState& state) {
 
   heading(t, L::margin, static_cast<int16_t>(top + 52), "手动输入网络名", TextAlign::Left, 300);
   chevron(t, L::rightEdge - 22, static_cast<int16_t>(top + 46));
-  footer(t, "只显示 2.4GHz 网络", "点一行连接");
+
+  if (pageCount > 1) {
+    char pageLabel[32];
+    std::snprintf(pageLabel, sizeof(pageLabel), "%u/%u 页 · 上下滑翻",
+                  static_cast<unsigned>(page + 1), static_cast<unsigned>(pageCount));
+    footer(t, state, "只显示 2.4GHz 网络", pageLabel);
+  } else {
+    footer(t, state, "只显示 2.4GHz 网络", "点一行连接");
+  }
+  (void)drawn;
 }
 
-// The QWERTY block, shared by the password and city-search screens.
-void drawKeyboard(DrawTarget& t, const char* primaryLabel) {
-  constexpr const char* kRows[3] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
-  int16_t top = L::keyboardTop;
-  for (uint8_t r = 0; r < 3; ++r) {
-    const size_t count = std::strlen(kRows[r]);
-    int16_t x = static_cast<int16_t>(L::keyX0 + (r == 1 ? 25 : (r == 2 ? 50 : 0)));
-    for (size_t i = 0; i < count; ++i) {
-      char label[2] = {kRows[r][i], '\0'};
-      keyCap(t, Rect{x, top, L::keyWide, L::keyHeight}, label);
-      x = static_cast<int16_t>(x + L::keyWide + L::keyGap);
-    }
-    top = static_cast<int16_t>(top + L::keyHeight + 10);
+// Draws whatever settingsLayoutKeys() placed: same rects the flow hit-tests.
+void drawKeyboard(DrawTarget& t, const SettingsUiState& state, const char* primaryLabel) {
+  SettingsKey keys[kKeyboardKeyMax];
+  const uint8_t count = settingsLayoutKeys(state.keyboardLayer, primaryLabel, keys, kKeyboardKeyMax);
+  for (uint8_t i = 0; i < count; ++i) {
+    const SettingsKey& key = keys[i];
+    if (key.label == nullptr) continue;
+    keyCap(t, key.rect, key.label, key.action == SettingsKeyAction::Primary);
   }
-  // Shift and delete ride on the third row's shoulders.
-  const int16_t row3 = static_cast<int16_t>(top - L::keyHeight - 10);
-  keyCap(t, Rect{L::keyX0, row3, 64, L::keyHeight}, "Shift");
-  keyCap(t,
-         Rect{static_cast<int16_t>(L::keyX0 + 64 + L::keyGap + 7 * (L::keyWide + L::keyGap) + L::keyGap),
-              row3, 64, L::keyHeight},
-         "Del");
-  // Bottom row.
-  keyCap(t, Rect{L::keyX0, top, 80, L::keyHeight}, "123");
-  keyCap(t, Rect{static_cast<int16_t>(L::keyX0 + 80 + L::keyGap), top, 250, L::keyHeight}, "空格");
-  keyCap(t,
-         Rect{static_cast<int16_t>(L::keyX0 + 80 + L::keyGap + 250 + L::keyGap), top, 150, L::keyHeight},
-         primaryLabel, true);
 }
 
 void drawPassword(DrawTarget& t, const SettingsUiState& state) {
@@ -332,8 +341,8 @@ void drawPassword(DrawTarget& t, const SettingsUiState& state) {
          TextAlign::Left, 400);
   }
 
-  drawKeyboard(t, state.primaryLabel != nullptr ? state.primaryLabel : "连接");
-  footer(t, "点上面的网络可以重选", "连上后自动返回");
+  drawKeyboard(t, state, state.primaryLabel != nullptr ? state.primaryLabel : "连接");
+  footer(t, state, "点上面的网络可以重选", "连上后自动返回", /*showStatus=*/false);
 }
 
 void drawCity(DrawTarget& t, const SettingsUiState& state) {
@@ -358,7 +367,7 @@ void drawCity(DrawTarget& t, const SettingsUiState& state) {
 
   heading(t, L::margin, static_cast<int16_t>(top + 56), "搜索其他城市", TextAlign::Left, 300);
   chevron(t, L::rightEdge - 22, static_cast<int16_t>(top + 50));
-  footer(t, "点一行选定", "坐标一起保存");
+  footer(t, state, "点一行选定", "坐标一起保存");
 }
 
 void drawCitySearch(DrawTarget& t, const SettingsUiState& state) {
@@ -378,8 +387,8 @@ void drawCitySearch(DrawTarget& t, const SettingsUiState& state) {
     body(t, L::margin, 262, "城市名用拼音或英文，同名城市会出现候选", TextAlign::Left, 460);
   }
 
-  drawKeyboard(t, state.primaryLabel != nullptr ? state.primaryLabel : "搜索");
-  footer(t, "点候选选定", "中文名也可");
+  drawKeyboard(t, state, state.primaryLabel != nullptr ? state.primaryLabel : "搜索");
+  footer(t, state, "点候选选定", "中文名也可");
 }
 
 void drawCityHits(DrawTarget& t, const SettingsUiState& state) {
@@ -388,7 +397,7 @@ void drawCityHits(DrawTarget& t, const SettingsUiState& state) {
   if (candidates == nullptr || candidates->count == 0) {
     heading(t, 0, 400, "没有找到这个城市", TextAlign::Center, L::width);
     body(t, 0, 452, "换个拼写再试一次", TextAlign::Center, L::width);
-    footer(t, "‹ 返回重新输入");
+    footer(t, state, "‹ 返回重新输入");
     return;
   }
 
@@ -406,7 +415,7 @@ void drawCityHits(DrawTarget& t, const SettingsUiState& state) {
     dashRule(t, static_cast<int16_t>(top + 108), L::margin + 12);
     top = static_cast<int16_t>(top + 116);
   }
-  footer(t, "点一行选定", "同名看省份");
+  footer(t, state, "点一行选定", "同名看省份");
 }
 
 void drawCoins(DrawTarget& t, const SettingsUiState& state) {
@@ -432,7 +441,7 @@ void drawCoins(DrawTarget& t, const SettingsUiState& state) {
     dashRule(t, static_cast<int16_t>(top + 86));
     top = static_cast<int16_t>(top + 92);
   }
-  footer(t, "至少 4 个", "点一行勾选");
+  footer(t, state, "至少 4 个", "点一行勾选");
 }
 
 void drawOptionList(DrawTarget& t, const SettingsUiState& state, const char* title, const char* const* labels,
@@ -443,10 +452,108 @@ void drawOptionList(DrawTarget& t, const SettingsUiState& state, const char* tit
     optionRow(t, top, L::rowHeight, labels[i], i == selected);
     top = static_cast<int16_t>(top + L::rowHeight);
   }
-  footer(t, "点一行选定", hint);
+  footer(t, state, "点一行选定", hint);
 }
 
 }  // namespace
+
+// Key placement, in one place. Letter layers are QWERTY with Shift/delete on the
+// third row's shoulders; the digit layer is three rows of ten with delete moved to
+// the bottom row (where a gap opens up), because ten keys leave no room for a
+// shoulder. Rows are centred by their own width, so changing a layer cannot
+// silently shift a key out from under the finger.
+uint8_t settingsLayoutKeys(uint8_t layer, const char* primaryLabel, SettingsKey* out, uint8_t capacity) {
+  static const char* const kLower[3] = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
+  static const char* const kUpper[3] = {"QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"};
+  static const char* const kDigits[3] = {"1234567890", "-_=+()[]{}", ".,?!@#$%^&*"};
+  const uint8_t clamped = layer < kKeyboardLayers ? layer : 0;
+  const char* const* rows = clamped == 1 ? kUpper : (clamped == 2 ? kDigits : kLower);
+
+  const int16_t rowPitch = static_cast<int16_t>(L::keyHeight + 10);
+  const auto rowWidth = [](size_t count) {
+    return static_cast<int16_t>(count * (L::keyWide + L::keyGap) - L::keyGap);
+  };
+  const auto place = [&](uint8_t index, int16_t x, int16_t y, int16_t width, const char* label,
+                         char output, SettingsKeyAction action) -> uint8_t {
+    if (index >= capacity) return index;
+    out[index].rect = Rect{x, y, width, L::keyHeight};
+    out[index].label = label;
+    out[index].output = output;
+    out[index].action = action;
+    return static_cast<uint8_t>(index + 1);
+  };
+
+  // Each key needs its own null-terminated one-character label: pointing every
+  // key at an offset inside the row string would make key i read "the rest of the
+  // row" (and the drawing would ellipsise all of them).
+  static char charLabels[kKeyboardLayers][kKeyboardKeyMax][2] = {{{0}}};
+
+  uint8_t count = 0;
+  const bool digits = clamped == 2;
+  for (uint8_t r = 0; r < 3; ++r) {
+    const char* keys = rows[r];
+    const size_t length = std::strlen(keys);
+    const int16_t y = static_cast<int16_t>(L::keyboardTop + r * rowPitch);
+    if (digits) {
+      // Ten keys per row: use the full width, no shoulders.
+      const int16_t x0 = static_cast<int16_t>((L::width - rowWidth(length)) / 2);
+      for (size_t i = 0; i < length; ++i) {
+        char* label = charLabels[clamped][count];
+        label[0] = keys[i];
+        label[1] = '\0';
+        count = place(count, static_cast<int16_t>(x0 + i * (L::keyWide + L::keyGap)), y, L::keyWide,
+                      label, keys[i], SettingsKeyAction::Character);
+      }
+      continue;
+    }
+
+    const bool shoulderRow = (r == 2);
+    int16_t x = 0;
+    if (shoulderRow) {
+      count = place(count, L::keyX0, y, 64, "Shift", 0, SettingsKeyAction::Shift);
+      x = static_cast<int16_t>(L::keyX0 + 64 + L::keyGap);
+    } else {
+      x = static_cast<int16_t>((L::width - rowWidth(length)) / 2);
+    }
+    for (size_t i = 0; i < length; ++i) {
+      char* label = charLabels[clamped][count];
+      label[0] = keys[i];
+      label[1] = '\0';
+      count = place(count, x, y, L::keyWide, label, keys[i], SettingsKeyAction::Character);
+      x = static_cast<int16_t>(x + L::keyWide + L::keyGap);
+    }
+    if (shoulderRow) {
+      count = place(count, static_cast<int16_t>(x + L::keyGap), y, 64, "Del", 0,
+                    SettingsKeyAction::Delete);
+    }
+  }
+
+  // Bottom row.
+  const int16_t y = static_cast<int16_t>(L::keyboardTop + 3 * rowPitch);
+  if (digits) {
+    int16_t x = L::keyX0;
+    count = place(count, x, y, 70, "ABC", 0, SettingsKeyAction::Mode);
+    x = static_cast<int16_t>(x + 70 + L::keyGap);
+    count = place(count, x, y, 200, "空格", ' ', SettingsKeyAction::Space);
+    x = static_cast<int16_t>(x + 200 + L::keyGap);
+    count = place(count, x, y, 70, "Del", 0, SettingsKeyAction::Delete);
+    x = static_cast<int16_t>(x + 70 + L::keyGap);
+    count = place(count, x, y, 140, primaryLabel, 0, SettingsKeyAction::Primary);
+  } else {
+    int16_t x = L::keyX0;
+    count = place(count, x, y, 80, "123", 0, SettingsKeyAction::Mode);
+    x = static_cast<int16_t>(x + 80 + L::keyGap);
+    count = place(count, x, y, 250, "空格", ' ', SettingsKeyAction::Space);
+    x = static_cast<int16_t>(x + 250 + L::keyGap);
+    count = place(count, x, y, 150, primaryLabel, 0, SettingsKeyAction::Primary);
+  }
+  return count;
+}
+
+uint8_t settingsWifiPageCount(uint8_t networkCount) {
+  if (networkCount == 0) return 1;
+  return static_cast<uint8_t>((networkCount + kWifiRowsPerPage - 1) / kWifiRowsPerPage);
+}
 
 const char* settingsRefreshLabel(uint16_t minutes) {
   switch (minutes) {
