@@ -21,6 +21,7 @@
 
 #include "CjkGlyphSource.h"
 #include "ScaledDrawTarget.h"
+#include "SettingsUi.h"
 #include "WeatherParse.h"
 #include "WeatherUi.h"
 
@@ -136,6 +137,135 @@ bool loadCrypto(const char* path, weather::CryptoBoard& board) {
   return true;
 }
 
+int writePbm(const char* path);
+
+// Synthetic state for the settings screenshots: a configured home network, a
+// short scan list, and the real Paris candidates (so the same-name case shows).
+weather::Settings demoSettings() {
+  weather::Settings settings;
+  std::snprintf(settings.wifiSsid, sizeof(settings.wifiSsid), "%s", "home-wifi");
+  std::snprintf(settings.wifiPassword, sizeof(settings.wifiPassword), "%s", "hunter2xy");
+  std::snprintf(settings.city, sizeof(settings.city), "%s", "Wuhan");
+  std::snprintf(settings.place, sizeof(settings.place), "%s", "武汉");
+  settings.latitude = 30.5833f;
+  settings.longitude = 114.2667f;
+  settings.refreshMinutes = 30;
+  settings.retryMinutes = 5;
+  settings.defaultPage = 0;
+  settings.coinMask = 0x7F;
+  return settings;
+}
+
+weather::WifiList demoNetworks() {
+  weather::WifiList list;
+  struct Row {
+    const char* ssid;
+    int8_t rssi;
+    bool secure;
+  };
+  const Row rows[] = {
+      {"home-wifi", -52, true},   {"M5-PaperS3", -58, true},  {"Xiaomi_AX3000", -71, true},
+      {"ChinaNet-8fZq", -76, true}, {"CMCC-Guest", -80, false}, {"TP-LINK_2.4G", -88, true},
+  };
+  for (const Row& row : rows) {
+    weather::WifiEntry& entry = list.items[list.count++];
+    std::snprintf(entry.ssid, sizeof(entry.ssid), "%s", row.ssid);
+    entry.rssi = row.rssi;
+    entry.secure = row.secure;
+  }
+  return list;
+}
+
+weather::GeoCandidates demoCandidates() {
+  weather::GeoCandidates candidates;
+  struct Row {
+    const char* name;
+    const char* admin1;
+    const char* country;
+    float lat;
+    float lon;
+  };
+  const Row rows[] = {
+      {"巴黎", "法兰西岛", "法国", 48.85f, 2.35f},
+      {"Paris", "得克萨斯州", "美国", 33.66f, -95.56f},
+      {"Paris", "田纳西州", "美国", 36.30f, -88.33f},
+      {"巴黎", "肯塔基州", "美国", 38.21f, -84.25f},
+      {"Paris", "伊利诺伊州", "美国", 39.61f, -87.70f},
+  };
+  for (const Row& row : rows) {
+    weather::GeoCandidate& candidate = candidates.items[candidates.count++];
+    std::snprintf(candidate.name, sizeof(candidate.name), "%s", row.name);
+    std::snprintf(candidate.admin1, sizeof(candidate.admin1), "%s", row.admin1);
+    std::snprintf(candidate.country, sizeof(candidate.country), "%s", row.country);
+    std::snprintf(candidate.timezone, sizeof(candidate.timezone), "%s", "Asia/Shanghai");
+    candidate.latitude = row.lat;
+    candidate.longitude = row.lon;
+  }
+  return candidates;
+}
+
+// Renders one settings screen onto the PaperS3's panel geometry and returns true
+// when the variant was a settings one.
+bool renderSettingsVariant(const char* pageName, const char* out) {
+  struct Mapping {
+    const char* name;
+    weather::SettingsScreen screen;
+  };
+  const Mapping kMappings[] = {
+      {"settings", weather::SettingsScreen::Home},
+      {"settings-wifi", weather::SettingsScreen::Wifi},
+      {"settings-password", weather::SettingsScreen::Password},
+      {"settings-city", weather::SettingsScreen::City},
+      {"settings-city-search", weather::SettingsScreen::CitySearch},
+      {"settings-city-hits", weather::SettingsScreen::CityHits},
+      {"settings-coins", weather::SettingsScreen::Coins},
+      {"settings-interval", weather::SettingsScreen::Interval},
+      {"settings-page", weather::SettingsScreen::DefaultPage},
+  };
+  weather::SettingsScreen screen = weather::SettingsScreen::Home;
+  bool matched = false;
+  for (const Mapping& mapping : kMappings) {
+    if (std::strcmp(pageName, mapping.name) == 0) {
+      screen = mapping.screen;
+      matched = true;
+      break;
+    }
+  }
+  if (!matched) return false;
+
+  gPanelWidth = kPaperWidth;
+  gPanelHeight = kPaperHeight;
+  gPanelWidthBytes = gPanelWidth / 8;
+  std::memset(gFramebuffer, 0xFF, sizeof(gFramebuffer));
+  freeink::ui::DisplayTarget target(gFramebuffer, gPanelWidth, gPanelHeight, gPanelWidthBytes);
+  weather::CjkGlyphSource cjk;
+  weather::configureWeatherFonts(target, cjk);
+
+  weather::Settings settings = demoSettings();
+  weather::WifiList networks = demoNetworks();
+  weather::GeoCandidates candidates = demoCandidates();
+
+  weather::SettingsUiState state;
+  state.screen = screen;
+  state.settings = &settings;
+  state.networks = &networks;
+  state.candidates = &candidates;
+  state.batteryPercent = 82;
+  state.batteryKnown = true;
+  if (screen == weather::SettingsScreen::Password) {
+    state.editing = settings.wifiPassword;
+    state.status = "密码错误，请再试一次";
+  }
+  if (screen == weather::SettingsScreen::CitySearch) {
+    state.editing = "Paris";
+  }
+  if (screen == weather::SettingsScreen::CityHits) {
+    state.editing = "Paris";
+  }
+  weather::renderSettingsScreen(target, state);
+  return writePbm(out) == 0;
+}
+
 int writePbm(const char* path) {
   FILE* file = std::fopen(path, "wb");
   if (file == nullptr) return 1;
@@ -168,6 +298,14 @@ int main(int argc, char** argv) {
     page = page.substr(6);
   }
   const char* pageName = page.c_str();
+
+  // Settings screens are laid out natively in the PaperS3 frame, so they bypass
+  // the weather report entirely.
+  if (renderSettingsVariant(pageName, out)) {
+    std::printf("wrote %s (panel %dx%d, settings screen %s)\n", out, gPanelWidth, gPanelHeight,
+                pageName);
+    return 0;
+  }
 
   std::memset(gFramebuffer, 0xFF, sizeof(gFramebuffer));
   gPanelWidth = paper ? kPaperWidth : kX4Width;
