@@ -36,7 +36,8 @@ bool parseCoinQuotes(const char* json, size_t length, CryptoBoard& out);
 // ([[ts, quote volume, close, high, low, open, ...], ...], oldest first) into
 // that coin's 7-day sparkline, stored relative to the first close. The price and
 // 24 h change are left alone — those come from the quotes request.
-bool parseCoinCandles(const char* symbol, const char* json, size_t length, CryptoBoard& out);
+bool parseCoinCandles(const char* symbol, const char* json, size_t length, CryptoBoard& out,
+                      uint8_t closeField = 2);
 
 // Quotes for a whole board: starts from an empty board and requires at least
 // half the table to be present (otherwise the page would be misleading).

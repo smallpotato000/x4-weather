@@ -40,7 +40,8 @@ struct ParseContext {
   uint8_t quotesCommitted = 0;
 
   // Candles (Gate.io): [[ts, quote volume, close, high, low, open, ...], ...].
-  uint8_t candleCoin = 0;  // resolved from the symbol before parsing starts
+  uint8_t candleCoin = 0;   // resolved from the symbol before parsing starts
+  uint8_t candleClose = 2;  // Gate: 2; Binance klines: 4
   bool inSeries = false;
   bool inCandle = false;
   uint8_t candleField = 0;
@@ -316,8 +317,8 @@ void onNumber(void* ctx, const char* value, size_t) {
 
   if (p.target == ParseContext::Target::Candles) {
     if (!p.inCandle) return;
-    if (p.candleField == 2 && p.seriesCount < kSeriesPointMax) {
-      p.seriesPrice[p.seriesCount++] = number;  // 2 = close
+    if (p.candleField == p.candleClose && p.seriesCount < kSeriesPointMax) {
+      p.seriesPrice[p.seriesCount++] = number;  // the close column
     }
     ++p.candleField;
     return;
@@ -398,9 +399,10 @@ void onString(void* ctx, const char* value, size_t len) {
     return;
   }
   if (p.target == ParseContext::Target::Candles) {
-    // Gate.io quotes every candle field, so the closes arrive as strings.
+    // Candle fields arrive quoted on both providers (Gate quotes everything,
+    // Binance quotes the numbers and sends the timestamps bare).
     if (p.inCandle) {
-      if (p.candleField == 2 && p.seriesCount < kSeriesPointMax) {
+      if (p.candleField == p.candleClose && p.seriesCount < kSeriesPointMax) {
         p.seriesPrice[p.seriesCount++] = std::strtof(value, nullptr);
       }
       ++p.candleField;
@@ -523,7 +525,8 @@ bool parseCoinQuotes(const char* json, size_t length, CryptoBoard& out) {
   return !parser.hasError() && ctx.quotesCommitted > 0;
 }
 
-bool parseCoinCandles(const char* symbol, const char* json, size_t length, CryptoBoard& out) {
+bool parseCoinCandles(const char* symbol, const char* json, size_t length, CryptoBoard& out,
+                      uint8_t closeField) {
   if (json == nullptr || length == 0) return false;
   const int index = coinIndexForSymbol(symbol);
   if (index < 0) return false;
@@ -532,6 +535,7 @@ bool parseCoinCandles(const char* symbol, const char* json, size_t length, Crypt
   ctx.target = ParseContext::Target::Candles;
   ctx.crypto = &out;
   ctx.candleCoin = static_cast<uint8_t>(index);
+  ctx.candleClose = closeField;
 
   StreamingJsonParser parser(makeCallbacks(ctx));
   parser.feed(json, length);

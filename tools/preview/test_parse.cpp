@@ -213,6 +213,25 @@ void testGeoCandidates(const std::string& json) {
   check(weather::builtinCityIndexFor("Paris") == -1, "unknown city -> -1");
 }
 
+// The fallback candle source has a different column layout (Binance klines put
+// the close fifth) and numeric timestamps, so it gets its own recorded check.
+void testBinanceCandles(const std::string& btc) {
+  std::printf("recorded Binance kline response (%zu bytes)\n", btc.size());
+  weather::CryptoBoard board;
+  check(weather::parseCoinCandles("BTC", btc.c_str(), btc.size(), board, /*closeField=*/4),
+        "Binance candles parse with close=4");
+  check(board.coins[0].sparkCount == 42, "42 Binance closes kept");
+  check(board.coins[0].spark[0] == 0, "first Binance close is the reference");
+  checkFloat(board.coins[0].sparkRef, 82884.0f, "Binance reference close (index 4)");
+  check(board.coins[0].sparkMin < 0 && board.coins[0].sparkMax > -1000, "Binance series sane");
+
+  // And the Gate layout must not silently read the same array correctly.
+  weather::CryptoBoard wrong;
+  weather::parseCoinCandles("BTC", btc.c_str(), btc.size(), wrong, /*closeField=*/2);
+  check(wrong.coins[0].sparkCount == 0 || wrong.coins[0].sparkRef != 82884.0f,
+        "close=2 does not read Binance's open column as the series start");
+}
+
 void testLongArraysAreCapped() {
   std::printf("longer-than-layout arrays\n");
   const char* json =
@@ -290,6 +309,7 @@ int main(int argc, char** argv) {
   const char* btcCandlesPath = argc > 5 ? argv[5] : "tools/preview/candles_BTC.json";
   const char* geocodePath = argc > 4 ? argv[4] : "tools/preview/sample_geocode.json";
   const char* candidatePath = argc > 6 ? argv[6] : "tools/preview/sample_geocode_candidates.json";
+  const char* binancePath = argc > 7 ? argv[7] : "tools/preview/candles_BTC_binance.json";
   bool ok = false;
   const std::string forecast = readFile(forecastPath, ok);
   if (!ok) {
@@ -316,6 +336,11 @@ int main(int argc, char** argv) {
     std::printf("error: cannot read %s (run from the project root)\n", btcCandlesPath);
     return 2;
   }
+  const std::string binanceJson = readFile(binancePath, ok);
+  if (!ok) {
+    std::printf("error: cannot read %s (run from the project root)\n", binancePath);
+    return 2;
+  }
   const std::string candidateJson = readFile(candidatePath, ok);
   if (!ok) {
     std::printf("error: cannot read %s (run from the project root)\n", candidatePath);
@@ -328,6 +353,7 @@ int main(int argc, char** argv) {
   testCoinCandles(btcCandles);
   testRecordedGeocode(geocode);
   testGeoCandidates(candidateJson);
+  testBinanceCandles(binanceJson);
   testLongArraysAreCapped();
   testRejectsBrokenPayloads();
 

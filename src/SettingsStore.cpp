@@ -63,8 +63,10 @@ void loadText(Preferences& prefs, const char* key, char* destination, size_t cap
 Settings SettingsStore::load() {
   Settings settings = factoryDefaults();
 
+  // Read-write: opening the namespace read-only on a fresh device logs
+  // "nvs_open failed: NOT_FOUND", and creating the (empty) namespace is harmless.
   Preferences prefs;
-  if (!prefs.begin(kNamespace, /*readOnly=*/true)) {
+  if (!prefs.begin(kNamespace, /*readOnly=*/false)) {
     return settings;
   }
   loadText(prefs, kKeySsid, settings.wifiSsid, sizeof(settings.wifiSsid));

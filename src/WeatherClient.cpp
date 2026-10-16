@@ -223,21 +223,62 @@ bool WeatherClient::fetchCrypto(CryptoBoard& out) {
 
   // 2) One request per coin for the 7-day sparkline (best effort: a missing line
   // is better than no page). XMR has no reachable source, see the coin table.
+  //
+  // Two providers: Gate is smaller and was the only one needed, but it throttles
+  // after a burst, and six 15-second connect timeouts in a row cost a minute of
+  // awake time on a battery. So two consecutive failures switch the rest of the
+  // coins to Binance's public data host, and a run that keeps failing stops
+  // early instead of grinding through every coin.
   uint8_t lines = 0;
+  uint8_t failures = 0;
+  bool useBinance = false;
   for (uint8_t i = 0; i < kCoinCount; ++i) {
     const char* pair = coinInfo(i).pair;
     if (pair == nullptr) continue;
-
-    String url = "https://api.gateio.ws/api/v4/spot/candlesticks?interval=4h&limit=42&currency_pair=";
-    url += pair;
-    if (!http.begin(secure, url)) continue;
-    if (http.GET() == HTTP_CODE_OK) {
-      const String payload = http.getString();
-      if (parseCoinCandles(coinInfo(i).symbol, payload.c_str(), payload.length(), board)) ++lines;
+    if (failures >= 4) {
+      Serial.println("[weather] sparkline source failing: skipping the rest");
+      break;
     }
-    http.end();
+
+    String url;
+    uint8_t closeField = 2;
+    if (!useBinance) {
+      url = "https://api.gateio.ws/api/v4/spot/candlesticks?interval=4h&limit=42&currency_pair=";
+      url += pair;
+    } else {
+      // "BTC_USDT" -> "BTCUSDT"
+      char symbol[16];
+      uint8_t out = 0;
+      for (const char* c = pair; *c != '\0' && out < sizeof(symbol) - 1; ++c) {
+        if (*c != '_') symbol[out++] = *c;
+      }
+      symbol[out] = '\0';
+      url = "https://data-api.binance.vision/api/v3/klines?interval=4h&limit=42&symbol=";
+      url += symbol;
+      closeField = 4;
+    }
+
+    bool ok = false;
+    if (http.begin(secure, url)) {
+      if (http.GET() == HTTP_CODE_OK) {
+        const String payload = http.getString();
+        ok = parseCoinCandles(coinInfo(i).symbol, payload.c_str(), payload.length(), board, closeField);
+      }
+      http.end();
+    }
+    if (ok) {
+      ++lines;
+      failures = 0;
+    } else {
+      ++failures;
+      if (failures >= 2 && !useBinance) {
+        useBinance = true;
+        Serial.println("[weather] sparkline source switch: Binance");
+      }
+    }
   }
-  Serial.printf("[weather] crypto sparklines: %u\n", static_cast<unsigned>(lines));
+  Serial.printf("[weather] crypto sparklines: %u (%s)\n", static_cast<unsigned>(lines),
+                useBinance ? "Binance" : "Gate");
 
   board.ok = true;
   board.fetchedEpoch = epochNow();
