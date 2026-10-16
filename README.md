@@ -641,7 +641,26 @@ WiFi 列表按页显示（每页 6 个 + 上下滑翻页 + 底栏页码）；密
 > 可以画浅灰，观感会更好。关机按钮做的是**软件关机**；侧键长按 2 秒是硬件断电，
 > 所以界面卡住时照样能关机。
 
-## 17. 许可与致谢
+## 17. 上游反馈（FreeInk SDK）
+
+移植过程中发现三个值得回报给 [freeink-sdk](https://github.com/Free-Ink/freeink-sdk) 的问题，
+连同 PaperS3 的三项"待硬件验证"（我们实测全部通过）：
+
+- 报告文本：[docs/upstream/freeink-sdk-papers3-usb-detect.md](docs/upstream/freeink-sdk-papers3-usb-detect.md)
+- 补丁：[docs/upstream/0001-papers3-usb-detect-and-m5gfx-version.patch](docs/upstream/0001-papers3-usb-detect-and-m5gfx-version.patch)
+  （在 `1a5448d` 上 `git apply` 即可；已用五个构建环境 + SDK 自带主机测试验证）
+
+| # | 问题 | 处理 |
+|---|---|---|
+| 1 | PaperS3 `usbDetect`(GPIO5) 极性注释写反：实测插线时被主动拉低（floating/pull-up/pull-down 全 0） | 新增 `usbDetectActiveHigh`（默认 true 保持其它板行为），PaperS3 设 false；修正 profile 注释与文档 |
+| 2 | PaperS3 没有充电 IC/电量计 → `isExternalPowerPresent()` 只能回答"不知道"，而 `isCharging()` 满电后会变 false（SDK 有文档），于是"插着线但满电"无法与"用电池"区分 | 让 `isExternalPowerPresent()` 在该板回退到 `usbDetect` 引脚（按极性选择上/下拉，使断开时读到"无电缆"） |
+| 3 | `m5stack/M5GFX @ 0.2.20` 已不在 PlatformIO 注册表（现为 0.1.17 / 0.2.27–0.2.33）→ `pio run -e papers3` 直接 `UnknownPackageError` | 样例与文档改指 0.2.33 |
+
+附带在报告里记录了实测数据：面板旋转、GT911 轴映射、电池分压（4178 mV → 100%）、
+三种刷新耗时（FULL 1098 / HALF 1098 / FAST 562 / 无变化 440 ms），以及
+"浅睡 + GT911 中断唤醒可用（GPIO48 非 RTC IO，深睡不行）"这条对同路移植有用的结论。
+
+## 18. 许可与致谢
 
 - 本目录代码：MIT 许可（见 [LICENSE](LICENSE)，与本 SDK 同为 MIT）。
 - 位图字体：由 **Noto Sans SC**（SIL OFL 1.1）栅格化而来，仓库内保存的是位图数组。
