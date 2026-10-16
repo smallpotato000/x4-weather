@@ -310,6 +310,9 @@ https://api.coinlore.net/api/ticker/?id=90,80,58,2710,48543,2713,28
   → [{"id":"90","symbol":"BTC","price_usd":"83619.93","percent_change_24h":"-0.27", ...}, ...]
 
 # 每个币的 7 天走势：Gate.io 现货 4 小时 K 线，42 根（约 4 KB）
+# 连续 2 次失败自动改用 Binance（同一个响应形状，但收盘价在第 5 列而不是第 3 列）：
+#   https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=4h&limit=42
+# 连续 4 次失败就放弃剩余请求（6 × 15 秒超时 = 一分钟唤醒时间，电池上不值得）
 https://api.gateio.ws/api/v4/spot/candlesticks?currency_pair=BTC_USDT&interval=4h&limit=42
   → [["1791273600","117997889.14","86242.3","86377.6","85555.8","85561.5", ...], ...]
                  ↑时间戳        ↑成交额     ↑收盘（数组第 3 个）
@@ -473,6 +476,7 @@ sh tools/preview/render.sh ok /tmp/other.json /tmp/air.json   # 换数据源渲�
 | 深睡后不自动醒 | 看串口有没有 `deep sleep N min` 日志；确认电量，以及 `WEATHER_REFRESH_MINUTES` 不为 0 |
 | 设备频繁自己醒来 | 多半是按键悬空/干扰，把 `WEATHER_WAKE_ON_BUTTON` 设为 `0` |
 | 唤醒后还是旧数据 | 底栏会写“获取失败 …，显示上次数据”；检查网络，5 分钟后自动重试 |
+| 走势线偶尔整页没有 | Gate.io 会对短时间内的多次请求限流（真机实测：同一块板子第一轮 6 个请求全部成功，30 秒后的第二轮 6 个全部连不上，而同一时刻从电脑裸连它是 3/3 正常）。固件因此做了两手：连续 2 次失败自动切到 Binance，连续 4 次失败放弃剩余请求省电。价格与涨跌来自 CoinLore，不受影响 |
 | 行情页写“行情获取失败” | 看串口日志：`crypto quotes HTTP -1` = 连不上（换源，见上文的设备侧可达性表）、`403` = 被 Cloudflare 拦、`200` 但币数 0 = 响应格式变了。XMR 那行写“无走势”是正常的 |
 | 想让自己电脑当代理给设备用 | 现在的 ESP-IDF/Arduino TLS 栈**没有代理支持**（`esp-tls` 里没有 proxy 字段），要让设备走 HTTP CONNECT 代理得自己用 mbedTLS 手写隧道（约 150 行）；本项目的做法是**选裸连可达的数据源**，不需要代理 |
 | 编译报找不到 `../freeink-sdk` | 改 `platformio.ini` 里 5 个 `symlink://` 路径指向你的 SDK checkout |
