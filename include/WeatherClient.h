@@ -64,6 +64,15 @@ class WeatherClient {
     config_.longitude = longitude;
   }
 
+  // Credentials and header label come from the settings store, which may have
+  // been changed on the device since the build. The pointers must outlive the
+  // client (main.cpp keeps them in its global Settings).
+  void setCredentials(const char* ssid, const char* password) {
+    config_.ssid = ssid;
+    config_.password = password;
+  }
+  void setPlace(const char* place) { config_.place = place; }
+
   // Seconds since the epoch once SNTP has set the clock; 0 means "not set".
   uint32_t epochNow() const;
 

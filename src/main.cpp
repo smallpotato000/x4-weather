@@ -32,6 +32,7 @@
 
 #include "CjkGlyphSource.h"
 #include "ScaledDrawTarget.h"
+#include "SettingsStore.h"
 #include "WeatherClient.h"
 #include "WeatherUi.h"
 #include "config.h"
@@ -112,6 +113,7 @@ freeink::ui::DisplayTarget* target = nullptr;
 char statusLine[64] = {0};
 char displayPlace[32] = {0};  // header label: config name, else the geocoded one
 weather::GeoLocation location;
+weather::Settings settings;  // compile-time defaults overlaid with NVS
 bool haveReport = false;
 bool batteryKnown = false;
 uint8_t batteryPercent = 0;
@@ -148,7 +150,7 @@ void paint(EInkDisplay::RefreshMode mode) {
   if (target == nullptr) return;
   weather::ScreenState state;
   state.report = haveReport ? &report : nullptr;
-  state.place = displayPlace[0] != '\0' ? displayPlace : WEATHER_PLACE;
+  state.place = displayPlace[0] != '\0' ? displayPlace : settings.place;
   state.status = statusLine;
   state.page = page;
   state.busy = !firstAttemptDone;
@@ -256,11 +258,11 @@ void applyLocation() {
   if (location.valid) {
     client.setCoordinates(location.latitude, location.longitude);
   } else {
-    client.setCoordinates(WEATHER_LATITUDE, WEATHER_LONGITUDE);
+    client.setCoordinates(settings.latitude, settings.longitude);
   }
 
-  if (WEATHER_PLACE[0] != '\0') {
-    snprintf(displayPlace, sizeof(displayPlace), "%s", WEATHER_PLACE);
+  if (settings.place[0] != '\0') {
+    snprintf(displayPlace, sizeof(displayPlace), "%s", settings.place);
   } else if (location.valid && location.name[0] != '\0') {
     snprintf(displayPlace, sizeof(displayPlace), "%s", location.name);
   } else {
@@ -272,13 +274,13 @@ void applyLocation() {
 // back to the configured latitude/longitude when geocoding fails or no city is
 // configured. Needs WiFi to be up.
 void ensureLocation() {
-  if (location.valid || WEATHER_CITY[0] == '\0') {
+  if (location.valid || settings.city[0] == '\0') {
     applyLocation();
     return;
   }
 
   weather::GeoLocation found;
-  if (!client.fetchGeocode(WEATHER_CITY, found)) {
+  if (!client.fetchGeocode(settings.city, found)) {
     Serial.printf("[weather] geocoding failed: %s — using the configured coordinates\n",
                   client.lastError());
     applyLocation();
@@ -286,7 +288,7 @@ void ensureLocation() {
   }
   location = found;
   locationMagic = kLocationMagic;
-  Serial.printf("[weather] geocoded \"%s\" -> %.4f, %.4f (%s, %s)\n", WEATHER_CITY,
+  Serial.printf("[weather] geocoded \"%s\" -> %.4f, %.4f (%s, %s)\n", settings.city,
                 static_cast<double>(found.latitude), static_cast<double>(found.longitude), found.timezone,
                 found.country);
   applyLocation();
@@ -456,12 +458,12 @@ uint32_t runCycle(bool isColdBoot) {
 
   refreshBattery();
 
-  uint32_t sleepMinutes = WEATHER_REFRESH_MINUTES;
+  uint32_t sleepMinutes = settings.refreshMinutes;
   bool shouldPaint = true;
 
   if (!client.beginWifi()) {
     Serial.printf("[weather] wifi failed: %s\n", client.lastError());
-    sleepMinutes = WEATHER_RETRY_MINUTES;
+    sleepMinutes = settings.retryMinutes;
     if (haveReport) {
       setStatus("无法连接 WiFi，显示上次数据");
     } else if (isColdBoot) {
@@ -478,7 +480,7 @@ uint32_t runCycle(bool isColdBoot) {
       if (page == weather::Page::Crypto) ensureCrypto();
     } else {
       Serial.printf("[weather] fetch failed: %s\n", client.lastError());
-      sleepMinutes = WEATHER_RETRY_MINUTES;
+      sleepMinutes = settings.retryMinutes;
       char clock[8];
       weather::formatClock(client.epochNow(), clock, sizeof(clock));
       if (haveReport) {
@@ -557,6 +559,8 @@ void interactiveSession(int initialButton) {
           cryptoSortIndex = static_cast<uint8_t>((cryptoSortIndex + step) % weather::kCryptoSortCount);
           Serial.printf("[weather] crypto sort: %s\n",
                         weather::cryptoSortName(static_cast<weather::CryptoSort>(cryptoSortIndex)));
+          settings.cryptoSort = cryptoSortIndex;
+          weather::SettingsStore::save(settings);
         } else {
           page = button == InputManager::BTN_UP ? weather::previousPage(page) : weather::nextPage(page);
         }
@@ -768,6 +772,8 @@ void interactiveTouchSession() {
           cryptoSortIndex = static_cast<uint8_t>((cryptoSortIndex + step) % weather::kCryptoSortCount);
           Serial.printf("[weather] crypto sort: %s\n",
                         weather::cryptoSortName(static_cast<weather::CryptoSort>(cryptoSortIndex)));
+          settings.cryptoSort = cryptoSortIndex;
+          weather::SettingsStore::save(settings);  // survives a reflash
           repaint = true;
         }
       } else if (absDx > 60) {
@@ -810,6 +816,13 @@ void setup() {
   Serial.begin(115200);
   delay(300);  // let USB CDC enumerate so the first log lines are visible
 
+  // Settings first: NVS (what the user configured on the touch board) over the
+  // compile-time defaults in config.h/secrets.h. Everything below reads the
+  // resolved values instead of the macros.
+  settings = weather::SettingsStore::load();
+  client.setCredentials(settings.wifiSsid, settings.wifiPassword);
+  client.setPlace(settings.place);
+
   // Install the local timezone before anything formats a clock: the system time
   // survives deep sleep, and a wake whose fetch fails still paints a footer time
   // before configTzTime() ever runs.
@@ -847,7 +860,7 @@ void setup() {
                                           display.getDisplayHeight(), display.getDisplayWidthBytes());
   if (target == nullptr) {
     Serial.println("[weather] out of memory for the display target");
-    sleepFor(WEATHER_RETRY_MINUTES);
+    sleepFor(settings.retryMinutes);
   }
   // Landscape-native 800x480 panel -> DisplayTarget defaults to Portrait, so the
   // UI lays out in a 480x800 logical frame that reads upright on the held-tall X4.
@@ -864,7 +877,7 @@ void setup() {
   }
   applyLocation();
   const uint8_t defaultPage =
-      WEATHER_DEFAULT_PAGE < weather::kPageCount ? static_cast<uint8_t>(WEATHER_DEFAULT_PAGE) : 0;
+      settings.defaultPage < weather::kPageCount ? static_cast<uint8_t>(settings.defaultPage) : 0;
   if (!coldBoot && pageIndex < weather::kPageCount) {
     page = static_cast<weather::Page>(pageIndex);  // resume the page the user left
   } else {
@@ -908,5 +921,5 @@ void loop() {
   // Unreachable in normal operation: every setup() ends in deep sleep. Kept so
   // the Arduino runtime links; if it ever runs, sleep instead of spinning at
   // full clock.
-  sleepFor(WEATHER_RETRY_MINUTES);
+  sleepFor(settings.retryMinutes);
 }
