@@ -1,0 +1,300 @@
+From 0d297241f940a59a463f66cd63c9e1aa12ef637c Mon Sep 17 00:00:00 2001
+From: akiko <akiko@macmini.lan>
+Date: Sat, 17 Oct 2026 11:40:39 +0800
+Subject: [PATCH] fix(papers3): honour usbDetect polarity and report external
+ power
+
+The PaperS3's usbDetect pin (GPIO5) is driven LOW while a cable is attached,
+not HIGH as the profile comment and the support doc claimed. Measured on
+hardware: floating, pull-up and pull-down all read 0 with USB connected and
+the battery full. Because the board has no charger IC and no gauge,
+isExternalPowerPresent() had no source at all, and isCharging() goes false on
+a full battery while the cable stays in, so a consumer could not tell
+"plugged in, full" from "on battery".
+
+- BoardProfile.usbDetectActiveHigh (default true, matching the documented
+  "HIGH = USB present" convention, so no existing profile changes) lets a
+  profile state the polarity. M5PAPER_S3 sets false and spells out the
+  trailing fields it now needs.
+- BatteryMonitor::isExternalPowerPresent() falls back to the detect pin when
+  there is no gauge or PMIC to ask, reading it with the pull that leaves a
+  disconnected pin in the absent state (pull-up for active-low, pull-down for
+  active-high) so a floating line cannot report a cable that is not there.
+- BatteryMonitor.cpp and its host test include <initializer_list> themselves:
+  BoardConfig.h uses it in a range-for, which firmware builds got
+  transitively but host builds did not.
+- New host test covers the new path: active-low present/absent, the
+  active-high default, and "no detect pin" still answering unknown.
+
+Also bump m5stack/M5GFX to 0.2.33 in platformio.sample.ini and the support
+doc: 0.2.20 is no longer on the PlatformIO registry (it offers 0.1.17 and
+0.2.27..0.2.33), so a fresh `pio run -e papers3` stops at UnknownPackageError.
+
+While there, record what checked out on hardware, since the doc lists these as
+pending validation: panel rotation (540x960 portrait), the GT911 axes with
+swapXY/flipX/flipY/gt911CoordsAtByte0 as configured (corner taps land where
+they are drawn), and the x2.0 battery divider (4178 mV -> 100%).
+
+Tested: five firmware environments build against this; the BatteryMonitor host
+suite passes (54178 + 39 checks, plus the new usb-detect checks).
+---
+ docs/m5stack-papers3-support.md               |  8 ++-
+ .../BatteryMonitor/src/BatteryMonitor.cpp     | 14 ++++
+ libs/hardware/BatteryMonitor/test/host/run.sh | 11 ++-
+ .../BatteryMonitor/test/host/stubs/Arduino.h  |  5 +-
+ .../test/host/test_adc_usb_detect.cpp         | 70 +++++++++++++++++++
+ .../BoardConfig/include/BoardConfig.h         | 21 +++++-
+ platformio.sample.ini                         |  4 +-
+ 7 files changed, 123 insertions(+), 10 deletions(-)
+ create mode 100644 libs/hardware/BatteryMonitor/test/host/test_adc_usb_detect.cpp
+
+diff --git a/docs/m5stack-papers3-support.md b/docs/m5stack-papers3-support.md
+index 7b7177d..f94642e 100644
+--- a/docs/m5stack-papers3-support.md
++++ b/docs/m5stack-papers3-support.md
+@@ -69,7 +69,11 @@ touch paging). Firmware without touch page-turn support is unusable here.
+   power-off path). Idle level is LOW.
+ - **Wake-from-off via RTC**: the BM8563's INT line feeds the PMS150G, not an
+   ESP32 GPIO — set an RTC alarm before powering off.
+-- **USB detect** — GPIO5, HIGH = USB present (`BoardProfile.usbDetect`).
++- **USB detect** — GPIO5, **active-LOW**: the pin is driven low while a cable is
++  attached (measured on hardware: floating, pull-up and pull-down all read 0 with
++  USB connected and the battery full). `BoardProfile.usbDetectActiveHigh = false`
++  carries that, and `BatteryMonitor::isExternalPowerPresent()` answers from it —
++  which also covers "cable in, battery full", where `isCharging()` is false.
+ 
+ ## Peripherals
+ 
+@@ -98,7 +102,7 @@ board_build.arduino.memory_type = qio_opi
+ build_flags = -DBOARD_HAS_PSRAM -DFREEINK_DEVICE_PAPERS3=1
+ lib_deps =
+   BoardPaperS3=symlink://freeink-sdk/libs/hardware/BoardPaperS3
+-  m5stack/M5GFX @ 0.2.20
++  m5stack/M5GFX @ 0.2.33
+ ```
+ 
+ No `-DFREEINK_LGFX_EPD_CONFIG` is needed: `FREEINK_DEVICE_PAPERS3` selects
+diff --git a/libs/hardware/BatteryMonitor/src/BatteryMonitor.cpp b/libs/hardware/BatteryMonitor/src/BatteryMonitor.cpp
+index c521317..4c610c5 100644
+--- a/libs/hardware/BatteryMonitor/src/BatteryMonitor.cpp
++++ b/libs/hardware/BatteryMonitor/src/BatteryMonitor.cpp
+@@ -1,6 +1,7 @@
+ #include "BatteryMonitor.h"
+ 
+ #include <Arduino.h>
++#include <initializer_list>  // BoardConfig.h range-for over the latch pins
+ #include <BoardConfig.h>
+ #include <M5Pm1.h>
+ #include <esp_idf_version.h>
+@@ -802,6 +803,19 @@ bool BatteryMonitor::isExternalPowerPresent(bool* known) const {
+       return status.externalPower;
+     }
+   }
++  // Boards with a dedicated detect pin but no charger IC can still answer: the
++  // pin is the input rail's presence signal. Read it with the pull that puts a
++  // disconnected pin in the "absent" state, so a floating line cannot report a
++  // cable that is not there.
++  const int8_t pin = BoardConfig::ACTIVE.usbDetect;
++  if (pin >= 0) {
++    const bool activeHigh = BoardConfig::ACTIVE.usbDetectActiveHigh;
++    pinMode(pin, activeHigh ? INPUT_PULLDOWN : INPUT_PULLUP);
++    const bool level = digitalRead(pin) == HIGH;
++    if (known) *known = true;
++    return activeHigh ? level : !level;
++  }
++
+   if (known) *known = false;
+   return false;
+ }
+diff --git a/libs/hardware/BatteryMonitor/test/host/run.sh b/libs/hardware/BatteryMonitor/test/host/run.sh
+index 2491f4d..c142da3 100755
+--- a/libs/hardware/BatteryMonitor/test/host/run.sh
++++ b/libs/hardware/BatteryMonitor/test/host/run.sh
+@@ -1,6 +1,8 @@
+ #!/bin/sh
+-# Builds and runs the BQ27220 Design Capacity load against a model gauge, and the
+-# SGM41562 charger decode (Picco) against a model charger.
++# Builds and runs the BQ27220 Design Capacity load against a model gauge, the
++# SGM41562 charger decode (Picco) against a model charger, and the usbDetect
++# external-power path (PaperS3: no charger IC and no gauge, so the profile's
++# detect pin is the only source for "is a cable attached").
+ set -e
+ cd "$(dirname "$0")"
+ BUILD_DIR="${TMPDIR:-/tmp}/freeink-battery-tests"
+@@ -15,3 +17,8 @@ c++ -std=c++17 -Wall -Wextra -Werror \
+   -Istubs -I../../include -I../../../BoardConfig/include -I../../../XteinkDetect/test/host/stubs \
+   test_sgm41562.cpp -o "$BUILD_DIR/test_sgm41562"
+ "$BUILD_DIR/test_sgm41562"
++c++ -std=c++17 -Wall -Wextra -Werror \
++  -DFREEINK_DEVICE_PAPERS3=1 -DFREEINK_BATTERY_I2C_GAUGE=1 \
++  -Istubs -I../../include -I../../../BoardConfig/include -I../../../XteinkDetect/test/host/stubs \
++  test_adc_usb_detect.cpp ../../src/BatteryMonitor.cpp -o "$BUILD_DIR/test_adc_usb_detect"
++"$BUILD_DIR/test_adc_usb_detect"
+diff --git a/libs/hardware/BatteryMonitor/test/host/stubs/Arduino.h b/libs/hardware/BatteryMonitor/test/host/stubs/Arduino.h
+index 4541d45..1990b25 100644
+--- a/libs/hardware/BatteryMonitor/test/host/stubs/Arduino.h
++++ b/libs/hardware/BatteryMonitor/test/host/stubs/Arduino.h
+@@ -1,13 +1,14 @@
+ #pragma once
+ #include <cstdint>
+-constexpr int HIGH = 1, LOW = 0, INPUT = 1, OUTPUT = 3, INPUT_PULLUP = 5;
++constexpr int HIGH = 1, LOW = 0, INPUT = 1, OUTPUT = 3, INPUT_PULLUP = 5, INPUT_PULLDOWN = 9;
+ inline unsigned long hostMillis = 0;  // the test's clock; delay() advances it
+ inline unsigned long millis() { return hostMillis; }
+ inline void delay(unsigned long ms) { hostMillis += ms; }
+ inline void delayMicroseconds(unsigned int) {}
+ inline void pinMode(int, int) {}
+ inline void digitalWrite(int, int) {}
+-inline int digitalRead(int) { return 0; }
++inline int hostDigitalPin = 0;  // the test's detect-pin level
++inline int digitalRead(int) { return hostDigitalPin; }
+ inline uint32_t hostAdcMv = 0;  // the test's battery pin reading
+ inline uint32_t analogReadMilliVolts(int) { return hostAdcMv; }
+ struct SerialStub {
+diff --git a/libs/hardware/BatteryMonitor/test/host/test_adc_usb_detect.cpp b/libs/hardware/BatteryMonitor/test/host/test_adc_usb_detect.cpp
+new file mode 100644
+index 0000000..24f4b73
+--- /dev/null
++++ b/libs/hardware/BatteryMonitor/test/host/test_adc_usb_detect.cpp
+@@ -0,0 +1,70 @@
++// Boards with a usbDetect pin but no charger IC can still report external power:
++// the pin is the input rail's presence signal. The PaperS3 needs exactly this —
++// with a full battery the charger stops (isCharging() goes false) while the cable
++// stays plugged in, so isCharging() alone cannot answer "am I on USB?".
++//
++// The polarity matters: the PaperS3's GPIO5 is actively driven LOW while a cable
++// is attached (measured on hardware), which is why BoardProfile carries
++// usbDetectActiveHigh and the pin is read with the pull that puts a disconnected
++// line in the absent state.
++
++#include <Arduino.h>  // the host stub (hostDigitalPin)
++
++#include <cstddef>
++#include <cstdio>
++#include <initializer_list>
++#include <vector>  // BoardConfig.h range-for over a pin list
++
++#include <BatteryMonitor.h>
++#include <BoardConfig.h>
++
++// The stub I2C bus has nothing on it: the charger/gauge path answers "not
++// observed", which is exactly the PaperS3 situation, so the code must fall
++// through to the detect pin.
++bool hostI2cRead(uint8_t, uint8_t, uint8_t*, size_t) { return false; }
++bool hostI2cWrite(uint8_t, const std::vector<uint8_t>&) { return false; }
++
++namespace {
++
++int failures = 0;
++
++void check(bool ok, const char* what) {
++  std::printf("  %s  %s\n", ok ? "ok  " : "FAIL", what);
++  if (!ok) ++failures;
++}
++
++}  // namespace
++
++int main() {
++  // PaperS3: usbDetect GPIO5, active-low, no gauge, no charger.
++  BoardConfig::ACTIVE = BoardConfig::M5PAPER_S3;
++  BatteryMonitor monitor;
++
++  bool known = false;
++  hostDigitalPin = LOW;  // driven low with a cable attached
++  check(monitor.isExternalPowerPresent(&known), "active-low board: cable in -> present");
++  check(known, "active-low board: cable in -> known");
++
++  hostDigitalPin = HIGH;  // pulled up when nothing is connected
++  known = true;
++  check(!monitor.isExternalPowerPresent(&known), "active-low board: no cable -> absent");
++  check(known, "active-low board: no cable -> known");
++
++  // The default polarity (documented "HIGH = USB present") still reads the other
++  // way round, so boards that rely on it are unaffected.
++  BoardConfig::ACTIVE = BoardConfig::M5PAPER_S3;
++  BoardConfig::ACTIVE.usbDetectActiveHigh = true;
++  hostDigitalPin = HIGH;
++  check(monitor.isExternalPowerPresent(&known), "active-high board: HIGH -> present");
++  hostDigitalPin = LOW;
++  check(!monitor.isExternalPowerPresent(&known), "active-high board: LOW -> absent");
++
++  // A board with no detect pin keeps answering "no opinion".
++  BoardConfig::ACTIVE.usbDetect = BatteryMonitor::PIN_NONE;
++  known = true;
++  check(!monitor.isExternalPowerPresent(&known), "no detect pin -> false");
++  check(!known, "no detect pin -> unknown");
++
++  std::printf(failures == 0 ? "all usb-detect checks passed\n" : "%d check(s) FAILED\n", failures);
++  return failures == 0 ? 0 : 1;
++}
+diff --git a/libs/hardware/BoardConfig/include/BoardConfig.h b/libs/hardware/BoardConfig/include/BoardConfig.h
+index bcba952..87f63be 100644
+--- a/libs/hardware/BoardConfig/include/BoardConfig.h
++++ b/libs/hardware/BoardConfig/include/BoardConfig.h
+@@ -838,6 +838,11 @@ struct BoardProfile {
+   // WiFi transmit-power ceiling in 0.25 dBm units (esp_wifi_set_max_tx_power),
+   // applied whenever WiFi starts. 0 = the radio's default.
+   uint8_t wifiMaxTxPower = 0;
++  // Polarity of `usbDetect`. Default matches the documented "HIGH = USB present".
++  // False = the pin is driven LOW while a cable is attached (M5Stack PaperS3:
++  // measured floating/pull-up/pull-down all read 0 with USB connected), so
++  // consumers must read it with a pull-up and invert.
++  bool usbDetectActiveHigh = true;
+ };
+ 
+ constexpr TouchConfig NO_TOUCH = {TouchController::None,
+@@ -1424,7 +1429,7 @@ constexpr BoardProfile M5PAPER_S3 = {
+     3,     // batteryAdc GPIO3 (ADC1_CH2)
+     4,     // batteryChargeStatus GPIO4, LOW = charging (LGS4056H STAT)
+     2.0f,  // divider 2:1 (M5Unified's _adc_ratio; pending hardware validation)
+-    5,     // usbDetect GPIO5, HIGH = USB present
++    5,     // usbDetect GPIO5, active-LOW: driven low while a cable is attached
+     // GT911 on the internal I2C bus SDA41/SCL42 (shared with the BM8563 RTC +
+     // BMI270 IMU), INT=GPIO48, no reset wired (self-loads its config), 0x5D alt
+     // 0x14. Portrait digitizer (540x960) on the landscape panel -> swapXY, rawMax
+@@ -1447,7 +1452,19 @@ constexpr BoardProfile M5PAPER_S3 = {
+     // via Rtc alarm), not an ESP32 GPIO. BMI270 IMU (0x68) unsupported — omitted.
+     {41, 42, 400000, 0x51, 0, 0, 0, RtcType::Pcf8563, ImuType::None},
+     1.2f,  // uiScale: 4.7" 960x540 touch (~234 PPI) — finger-sized chrome, like LilyGo/M5Paper
+-    {}};   // no power latch: the PMS150G self-latches; off = GPIO44 pulse (BoardPaperS3::powerOff)
++    {},     // power: no latch (PMS150G self-latches; off = GPIO44 pulse via BoardPaperS3)
++    0,      // displayControllerVariant
++    {},     // viewableInsets
++    false,  // batteryChargeStatusActiveHigh: GPIO4 STAT is LOW = charging (LGS4056H)
++    NO_I2C_FRONTLIGHT,
++    {},     // haptic: none
++    0,      // headerOffsetY
++    0,      // cornerRadius: flat panel
++    0,      // tabBarOffsetY
++    100,    // tabBarHeightPct
++    100,    // tabBarWidthPct
++    0,      // wifiMaxTxPower: radio default
++    false};  // usbDetectActiveHigh: GPIO5 is driven LOW while a cable is attached
+ 
+ // --- EEGO Reader A4 — ESP32-S3 N16R8, UC8279C (768x552) + GSLX680 touch -------
+ // CrossPoint fork device; pins/resolution/calibration from stock-firmware RE,
+diff --git a/platformio.sample.ini b/platformio.sample.ini
+index 94c2c21..b6f869e 100644
+--- a/platformio.sample.ini
++++ b/platformio.sample.ini
+@@ -168,7 +168,7 @@ build_flags =
+ ;   -DFREEINK_LGFX_EPD_CONFIG=lilygoT5S3LgfxConfig
+ ; lib_deps =
+ ;   ${base.lib_deps}
+-;   m5stack/M5GFX @ 0.2.20
++;   m5stack/M5GFX @ 0.2.33
+ 
+ ; --- M5Paper v1.1 (4.7" ED047TC1 / IT8951E) — classic ESP32 -------------------
+ ; A third MCU family: the original ESP32 (ESP32-D0WDQ6), not C3 or S3, so this is
+@@ -225,7 +225,7 @@ build_flags =
+ lib_deps =
+   ${base.lib_deps}
+   BoardPaperS3=symlink://freeink-sdk/libs/hardware/BoardPaperS3
+-  m5stack/M5GFX @ 0.2.20
++  m5stack/M5GFX @ 0.2.33
+ 
+ ; --- EEGO Reader A4 — ESP32-S3 N16R8, UC8279C (768x552) + GSLX680 touch --------
+ ; UC8279C SPI panel (Uc8279cA4Driver), GSLX680 touch + PCF8563 RTC on the shared
+-- 
+2.54.0 (Apple Git-157)
+

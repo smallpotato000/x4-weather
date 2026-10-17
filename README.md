@@ -646,9 +646,10 @@ WiFi 列表按页显示（每页 6 个 + 上下滑翻页 + 底栏页码）；密
 移植过程中发现三个值得回报给 [freeink-sdk](https://github.com/Free-Ink/freeink-sdk) 的问题，
 连同 PaperS3 的三项"待硬件验证"（我们实测全部通过）：
 
+- 已提交 PR：**[Free-Ink/freeink-sdk#140](https://github.com/Free-Ink/freeink-sdk/pull/140)**
+  （分支 `fix/papers3-usb-detect-and-m5gfx` 推到 `smallpotato000/freeink-sdk`，基于上游 `084fdfb`）
 - 报告文本：[docs/upstream/freeink-sdk-papers3-usb-detect.md](docs/upstream/freeink-sdk-papers3-usb-detect.md)
-- 补丁：[docs/upstream/0001-papers3-usb-detect-and-m5gfx-version.patch](docs/upstream/0001-papers3-usb-detect-and-m5gfx-version.patch)
-  （在 `1a5448d` 上 `git apply` 即可；已用五个构建环境 + SDK 自带主机测试验证）
+- 补丁（`git format-patch` 产物，`git am` 即可）：[docs/upstream/0001-papers3-usb-detect-and-m5gfx.patch](docs/upstream/0001-papers3-usb-detect-and-m5gfx.patch)
 
 | # | 问题 | 处理 |
 |---|---|---|

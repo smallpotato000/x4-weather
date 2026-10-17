@@ -1,11 +1,14 @@
-# Issue: M5Stack PaperS3 — usbDetect polarity, external-power reporting, and a stale M5GFX pin
+# M5Stack PaperS3 — usbDetect polarity, external-power reporting, and a stale M5GFX pin
 
-**Repo:** https://github.com/Free-Ink/freeink-sdk
-**Base commit:** `1a5448d` (Merge pull request #138)
-**Patch:** [`0001-papers3-usb-detect-and-m5gfx-version.patch`](0001-papers3-usb-detect-and-m5gfx-version.patch) — applies with
-`git apply` on the base commit. Builds clean on all five of our PlatformIO envs (X4 ×2,
-papers3, papers3_bench, papers3_bringup) and the SDK's own host suite passes
-(`libs/hardware/BatteryMonitor/test/host/run.sh`: 54178 + 39 checks, 0 failures).
+**Pull request:** https://github.com/Free-Ink/freeink-sdk/pull/140
+(branch `fix/papers3-usb-detect-and-m5gfx` on `smallpotato000/freeink-sdk`, based on
+`084fdfb`, the upstream `main` at the time of writing)
+**Patch:** [`0001-papers3-usb-detect-and-m5gfx.patch`](0001-papers3-usb-detect-and-m5gfx.patch)
+(a `git format-patch` of the PR commit; `git am` it onto `084fdfb`, or `git apply` the diff part).
+Builds clean on all five of our PlatformIO envs (X4 ×2, papers3, papers3_bench,
+papers3_bringup) against the unpatched SDK too, and the SDK's own host suite passes
+(`libs/hardware/BatteryMonitor/test/host/run.sh`: 54178 + 39 checks + the new usb-detect
+test, 0 failures).
 
 Found while porting a weather/crypto firmware from the Xteink X4 (ESP32-C3) to the
 PaperS3 (ESP32-S3). Measured on real hardware; everything below has the raw reading
