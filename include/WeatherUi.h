@@ -24,9 +24,20 @@ static constexpr freeink::ui::FontId kFontBody = 0;   // bundled Noto Sans, 24 p
 static constexpr freeink::ui::FontId kFontTitle = 1;  // WeatherTitle, 34 px
 static constexpr freeink::ui::FontId kFontBig = 2;    // WeatherDigits, 112 px
 
-// Display order: the crypto board first (it is the page the device wakes up on),
-// then the weather pages. References elsewhere are by name, so this order is the
-// single place to change it.
+// Display order. The PaperS3 opens on a home page (clock, city, weather summary,
+// and a sleeping cat) and keeps the crypto board last; the X4 keeps the order it
+// shipped with, because it stays on the frozen `x4-c3` line with no new features.
+// References elsewhere are by name, so this is the single place to change it.
+#if FREEINK_DEVICE_PAPERS3
+enum class Page : uint8_t {
+  Home = 0,
+  Now = 1,
+  Hourly = 2,
+  AirQuality = 3,
+  Crypto = 4,
+};
+static constexpr uint8_t kPageCount = 5;
+#else
 enum class Page : uint8_t {
   Crypto = 0,
   Now = 1,
@@ -34,6 +45,7 @@ enum class Page : uint8_t {
   AirQuality = 3,
 };
 static constexpr uint8_t kPageCount = 4;
+#endif
 
 // Point the slots at the generated fonts and install the CJK fallback.
 void configureWeatherFonts(freeink::ui::DisplayTarget& target, CjkGlyphSource& fallback);

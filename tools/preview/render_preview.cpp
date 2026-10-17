@@ -357,19 +357,29 @@ int main(int argc, char** argv) {
   state.place = "武汉";
 
   const bool hourlyPage = std::strcmp(pageName, "hourly") == 0;
+#if FREEINK_DEVICE_PAPERS3
+  const bool homePage = std::strcmp(pageName, "home") == 0;  // PaperS3-only page
+#else
+  const bool homePage = false;
+#endif
   const bool airPage = std::strcmp(pageName, "aqi") == 0;
   const bool cryptoGainers = std::strcmp(pageName, "crypto-gainers") == 0;
   const bool cryptoLosers = std::strcmp(pageName, "crypto-losers") == 0;
   const bool cryptoPage = std::strcmp(pageName, "crypto") == 0 || cryptoGainers || cryptoLosers;
-  state.page = hourlyPage ? weather::Page::Hourly
-                          : (airPage ? weather::Page::AirQuality
-                                     : (cryptoPage ? weather::Page::Crypto : weather::Page::Now));
+#if FREEINK_DEVICE_PAPERS3
+  if (homePage) {
+    state.page = weather::Page::Home;
+  } else
+#endif
+    state.page = hourlyPage ? weather::Page::Hourly
+                            : (airPage ? weather::Page::AirQuality
+                                       : (cryptoPage ? weather::Page::Crypto : weather::Page::Now));
   state.batteryKnown = batteryPercent >= 0;
   state.batteryPercent = static_cast<uint8_t>(batteryPercent < 0 ? 0 : batteryPercent);
 
   // The extra pages are only reachable during a button session, so they are
   // previewed with the paging hint visible.
-  state.interactive = hourlyPage || airPage || cryptoPage;
+  state.interactive = hourlyPage || airPage || cryptoPage || homePage;
   if (cryptoPage) {
     state.cryptoSort = cryptoGainers ? weather::CryptoSort::Gainers
                                      : (cryptoLosers ? weather::CryptoSort::Losers : weather::CryptoSort::Table);

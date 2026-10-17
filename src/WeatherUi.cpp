@@ -1,5 +1,7 @@
 #include "WeatherUi.h"
 
+#include "ArtBits.h"
+
 #include <stdio.h>
 #include <string.h>
 
@@ -108,6 +110,9 @@ void formatRange(float tMin, float tMax, char* out, size_t outLen) {
 
 const char* pageName(Page page) {
   switch (page) {
+#if FREEINK_DEVICE_PAPERS3
+    case Page::Home: return "";
+#endif
     case Page::Hourly: return "未来 12 小时";
     case Page::AirQuality: return "空气质量";
     case Page::Crypto: return "数字货币";
@@ -182,18 +187,40 @@ void drawHeader(DrawTarget& target, const ScreenState& state) {
     copyIsoDate(observed, date, sizeof(date));
     formatShortDate(date, shortDate, sizeof(shortDate));
     snprintf(dateLabel, sizeof(dateLabel), "%s %s", shortDate, weekdayName(weekdayFromIsoDate(date)));
+#if FREEINK_DEVICE_PAPERS3
+    // Right edge stops short of the gear (the last 52 px of the strip).
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 52 - 170, 44, dateLabel,
+             TextAlign::Right, 170, Color::White);
+#else
     drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 170, 44, dateLabel, TextAlign::Right,
              170, Color::White);
+#endif
   }
 
   if (state.batteryKnown) {
     char battery[8];
     snprintf(battery, sizeof(battery), "%u%%", static_cast<unsigned>(state.batteryPercent));
+#if FREEINK_DEVICE_PAPERS3
+    // Leave the last 52 px for the settings gear: the whole strip opens settings,
+    // the icon is what tells a touch user it is tappable.
+    const int16_t batteryRight = static_cast<int16_t>(kWidth - kMargin - 52);
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, batteryRight, 84, battery, TextAlign::Right, 62,
+             Color::White);
+    drawBatteryGlyph(target, static_cast<int16_t>(batteryRight - 62 - 6 - 34), 76, state.batteryPercent);
+#else
     drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 62, 84, battery,
              TextAlign::Right, 62, Color::White);
     drawBatteryGlyph(target, static_cast<int16_t>(kWidth - kMargin - 62 - 6 - 34), 76,
                      state.batteryPercent);
+#endif
   }
+#if FREEINK_DEVICE_PAPERS3
+  {
+    const BitmapRef gear{art::kGearBits, art::kGearWidth, art::kGearHeight, BitmapFormat::BW1, true};
+    target.bitmap(Rect{static_cast<int16_t>(kWidth - kMargin - 40), 34, art::kGearWidth, art::kGearHeight},
+                  gear, BitmapMode::Contain, Paint::solid(Color::White));
+  }
+#endif
 }
 
 void drawFooter(DrawTarget& target, const ScreenState& state) {
@@ -204,7 +231,14 @@ void drawFooter(DrawTarget& target, const ScreenState& state) {
   char indicator[48];
   if (state.interactive) {
     snprintf(indicator, sizeof(indicator), "%u/%u %s", static_cast<unsigned>(state.page) + 1,
-             static_cast<unsigned>(kPageCount), state.hint != nullptr ? state.hint : "左右切页");
+             static_cast<unsigned>(kPageCount),
+             state.hint != nullptr ? state.hint
+#if FREEINK_DEVICE_PAPERS3
+                                   : "左右滑动翻页"
+#else
+                                   : "左右切页"
+#endif
+    );
   } else {
     snprintf(indicator, sizeof(indicator), "%u/%u", static_cast<unsigned>(state.page) + 1,
              static_cast<unsigned>(kPageCount));
@@ -256,6 +290,75 @@ void drawMetricsRow(DrawTarget& target, const CurrentWeather& current, int16_t b
 }
 
 // --- pages ------------------------------------------------------------------
+
+#if FREEINK_DEVICE_PAPERS3
+// Home: the clock and the weather up top, a sleeping cat below. Drawn only on the
+// touch board — the X4 keeps its shipped page set.
+void drawHomePage(DrawTarget& target, const ScreenState& state) {
+  const WeatherReport& report = *state.report;
+  const CurrentWeather& current = report.current;
+
+  // Clock: "2026-10-17T09:32" -> "09:32", plus the date underneath.
+  char clock[8] = "--:--";
+  char date[11] = {0};
+  char shortDate[8] = {0};
+  char dayLine[40] = {0};
+  if (current.time[0] != '\0' && strlen(current.time) >= 16) {
+    snprintf(clock, sizeof(clock), "%.5s", current.time + 11);
+    copyIsoDate(current.time, date, sizeof(date));
+    formatShortDate(date, shortDate, sizeof(shortDate));
+    snprintf(dayLine, sizeof(dayLine), "%s %s", shortDate, weekdayName(weekdayFromIsoDate(date)));
+  }
+  drawLine(target, freeink::ui::kWeatherDigitsFont, kFontBig, 0, 196, clock, TextAlign::Center, kWidth,
+           Color::Black);
+
+  if (dayLine[0] != '\0') {
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 0, 244, dayLine, TextAlign::Center, kWidth,
+             Color::Black);
+  }
+
+  drawDashedRule(target, 286, kMargin, kWidth - kMargin);
+
+  // City, then the summary line the user asked for.
+  const char* city = report.place[0] != '\0' ? report.place : (state.place != nullptr ? state.place : "天气");
+  drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, 0, 348, city, TextAlign::Center, kWidth,
+           Color::Black);
+
+  char summary[48] = {0};
+  if (current.valid) {
+    char temp[16];
+    formatTemp1(current.temperatureC, temp, sizeof(temp));
+    snprintf(summary, sizeof(summary), "%s°C  %s", temp, conditionText(current.code));
+  } else {
+    snprintf(summary, sizeof(summary), "暂无观测");
+  }
+  drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, 0, 408, summary, TextAlign::Center, kWidth,
+           Color::Black);
+
+  char detail[64] = {0};
+  if (report.days[0].valid) {
+    char range[32];
+    formatRange(report.days[0].tMin, report.days[0].tMax, range, sizeof(range));
+    snprintf(detail, sizeof(detail), "%s  湿度 %u%%", range, static_cast<unsigned>(current.humidity));
+  }
+  drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 0, 456, detail, TextAlign::Center, kWidth,
+           Color::Black);
+
+  drawDashedRule(target, 506, kMargin, kWidth - kMargin);
+
+  // The sleeping cat: lower half, centred, ending clear of the footer. The art is
+  // trimmed to its ink, so the placement numbers are the whole gap budget.
+  constexpr int16_t catHeight = static_cast<int16_t>(art::kCatHeight);
+  constexpr int16_t catY = static_cast<int16_t>(780 - 44 - catHeight);
+  constexpr int16_t catX = (kWidth - static_cast<int16_t>(art::kCatWidth)) / 2;
+  const BitmapRef cat{art::kCatBits, art::kCatWidth, art::kCatHeight, BitmapFormat::BW1, true};
+  target.bitmap(Rect{catX, catY, art::kCatWidth, art::kCatHeight}, cat, BitmapMode::Contain,
+                Paint::solid(Color::Black));
+  // Zzz in the empty band above the cat's back, clear of the weather lines.
+  drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, static_cast<int16_t>(catX + 250),
+           static_cast<int16_t>(catY + 26), "Z z z", TextAlign::Left, 130, Color::Black);
+}
+#endif  // FREEINK_DEVICE_PAPERS3
 
 void drawNowPage(DrawTarget& target, const WeatherReport& report) {
   const CurrentWeather& current = report.current;
@@ -570,12 +673,21 @@ void renderWeatherScreen(DrawTarget& target, const ScreenState& state) {
   drawHeader(target, state);
   drawFooter(target, state);
 
-  if (report == nullptr || (!hasData && state.page == Page::Now)) {
+  if (report == nullptr || (!hasData && (state.page == Page::Now
+#if FREEINK_DEVICE_PAPERS3
+                                        || state.page == Page::Home
+#endif
+                                            ))) {
     drawPlaceholder(target, state);
     return;
   }
 
   switch (state.page) {
+#if FREEINK_DEVICE_PAPERS3
+    case Page::Home:
+      drawHomePage(target, state);
+      break;
+#endif
     case Page::Hourly:
       drawHourlyPage(target, *report);
       break;

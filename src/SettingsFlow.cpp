@@ -508,7 +508,12 @@ void handleOptionList(const Point& p, uint8_t count, const uint16_t* values) {
 }
 
 void handleDefaultPage(const Point& p) {
-  const int row = rowAt(p, L::rowsTop, L::rowHeight, 4);
+#if FREEINK_DEVICE_PAPERS3
+  const uint8_t optionCount = 5;  // 首页 / 当前天气 / 逐小时 / 空气质量 / 数字货币
+#else
+  const uint8_t optionCount = 4;
+#endif
+  const int row = rowAt(p, L::rowsTop, L::rowHeight, optionCount);
   if (row < 0) {
     repaint();
     return;

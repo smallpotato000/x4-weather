@@ -25,14 +25,27 @@ PY="${PREVIEW_PYTHON:-python3}"
 OUT_DIR="build/preview"
 mkdir -p "$OUT_DIR"
 
+# Two binaries: the default one matches the X4 build, the other carries
+# -DFREEINK_DEVICE_PAPERS3 so the PaperS3-only pages (the home page) exist.
+SOURCES="$SDK/libs/ui/FreeInkUI/src/FreeInkUI.cpp
+  src/WeatherUi.cpp src/WeatherData.cpp src/WeatherParse.cpp src/CityList.cpp src/SettingsUi.cpp src/CjkGlyphSource.cpp
+  $SDK/libs/network/JsonSax/src/StreamingJsonParser.cpp
+  tools/preview/render_preview.cpp"
 c++ -std=c++17 -O1 -Wall -Wextra \
   -I include -I "$SDK/libs/ui/FreeInkUI/include" -I "$SDK/libs/network/JsonSax/include" \
-  "$SDK/libs/ui/FreeInkUI/src/FreeInkUI.cpp" \
-  src/WeatherUi.cpp src/WeatherData.cpp src/WeatherParse.cpp src/CityList.cpp src/SettingsUi.cpp src/CjkGlyphSource.cpp \
-  "$SDK/libs/network/JsonSax/src/StreamingJsonParser.cpp" \
-  tools/preview/render_preview.cpp \
-  -o "$OUT_DIR/render_preview"
+  $SOURCES -o "$OUT_DIR/render_preview"
+case "$VARIANT" in
+  paper-*|settings*)
+    c++ -std=c++17 -O1 -Wall -Wextra -DFREEINK_DEVICE_PAPERS3=1 \
+      -I include -I "$SDK/libs/ui/FreeInkUI/include" -I "$SDK/libs/network/JsonSax/include" \
+      $SOURCES -o "$OUT_DIR/render_preview_s3"
+    BIN="$OUT_DIR/render_preview_s3"
+    ;;
+  *)
+    BIN="$OUT_DIR/render_preview"
+    ;;
+esac
 
-"$OUT_DIR/render_preview" "$OUT_DIR/$VARIANT.pbm" "$VARIANT" "$RESPONSE" "$AIR" "$CRYPTO" "$BATTERY"
+"$BIN" "$OUT_DIR/$VARIANT.pbm" "$VARIANT" "$RESPONSE" "$AIR" "$CRYPTO" "$BATTERY"
 
 "$PY" tools/preview/to_png.py "$OUT_DIR/$VARIANT.pbm" "$OUT_DIR/${VARIANT}_native.png" "$OUT_DIR/${VARIANT}_portrait.png"
