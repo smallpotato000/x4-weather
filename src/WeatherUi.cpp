@@ -203,9 +203,10 @@ void drawHeader(DrawTarget& target, const ScreenState& state) {
 #if FREEINK_DEVICE_PAPERS3
     // Leave the last 52 px for the settings gear: the whole strip opens settings,
     // the icon is what tells a touch user it is tappable.
+    // The gear owns the last 52 px of the strip; the battery ends where it starts.
     const int16_t batteryRight = static_cast<int16_t>(kWidth - kMargin - 52);
-    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, batteryRight, 84, battery, TextAlign::Right, 62,
-             Color::White);
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, static_cast<int16_t>(batteryRight - 62), 84,
+             battery, TextAlign::Right, 62, Color::White);
     drawBatteryGlyph(target, static_cast<int16_t>(batteryRight - 62 - 6 - 34), 76, state.batteryPercent);
 #else
     drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kWidth - kMargin - 62, 84, battery,
@@ -217,7 +218,7 @@ void drawHeader(DrawTarget& target, const ScreenState& state) {
 #if FREEINK_DEVICE_PAPERS3
   {
     const BitmapRef gear{art::kGearBits, art::kGearWidth, art::kGearHeight, BitmapFormat::BW1, true};
-    target.bitmap(Rect{static_cast<int16_t>(kWidth - kMargin - 40), 34, art::kGearWidth, art::kGearHeight},
+    target.bitmap(Rect{static_cast<int16_t>(kWidth - kMargin - 40), 14, art::kGearWidth, art::kGearHeight},
                   gear, BitmapMode::Contain, Paint::solid(Color::White));
   }
 #endif
@@ -363,16 +364,36 @@ void drawHomePage(DrawTarget& target, const ScreenState& state) {
 void drawNowPage(DrawTarget& target, const WeatherReport& report) {
   const CurrentWeather& current = report.current;
 
-  drawIcon(target, conditionIcon(current.code, current.isDay), Rect{176, 128, 128, 128}, false);
+  // Rhythm: icon, big temperature, condition, metrics, then a rule that closes
+  // the block off from the three-day list. The PaperS3 gets the tightened
+  // rhythm; the X4 keeps the exact geometry it shipped with (its firmware comes
+  // from the frozen x4-c3 branch, and this file's X4 output stays byte-identical).
+#if FREEINK_DEVICE_PAPERS3
+  constexpr Rect kIconRect{182, 124, 116, 116};
+  constexpr int16_t kTempBaseline = 342;
+  constexpr int16_t kConditionBaseline = 402;
+  constexpr int16_t kMetricsBaseline = 460;
+  constexpr bool kRuleAboveList = true;
+#else
+  constexpr Rect kIconRect{176, 128, 128, 128};
+  constexpr int16_t kTempBaseline = 350;
+  constexpr int16_t kConditionBaseline = 424;
+  constexpr int16_t kMetricsBaseline = 478;
+  constexpr bool kRuleAboveList = false;
+#endif
+  drawIcon(target, conditionIcon(current.code, current.isDay), kIconRect, false);
 
   char number[16];
   formatTemp1(current.temperatureC, number, sizeof(number));
-  drawFigure(target, number, "°C", 350);
+  drawFigure(target, number, "°C", kTempBaseline);
 
-  drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, 0, 424, conditionText(current.code),
-           TextAlign::Center, kWidth, Color::Black);
+  drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, 0, kConditionBaseline,
+           conditionText(current.code), TextAlign::Center, kWidth, Color::Black);
 
-  drawMetricsRow(target, current, 478);
+  drawMetricsRow(target, current, kMetricsBaseline);
+  if (kRuleAboveList) {
+    drawDashedRule(target, static_cast<int16_t>(kRowsTop - 18), kMargin, kWidth - kMargin);
+  }
 
   for (uint8_t i = 0; i < kForecastDays; ++i) {
     const int16_t rowTop = static_cast<int16_t>(kRowsTop + i * kRowHeight);
