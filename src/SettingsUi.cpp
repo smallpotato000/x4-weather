@@ -219,6 +219,8 @@ void drawHome(DrawTarget& t, const SettingsUiState& state) {
   top = static_cast<int16_t>(top + L::rowHeight);
   valueRow(t, top, L::rowHeight, "自选币种", coins);
   top = static_cast<int16_t>(top + L::rowHeight);
+  valueRow(t, top, L::rowHeight, "关于", state.aboutVersion != nullptr ? state.aboutVersion : "");
+  top = static_cast<int16_t>(top + L::rowHeight);
 
   const Rect power{L::margin, static_cast<int16_t>(top + 12), static_cast<int16_t>(L::width - L::margin * 2),
                    92};
@@ -418,6 +420,42 @@ void drawCityHits(DrawTarget& t, const SettingsUiState& state) {
   footer(t, state, "点一行选定", "同名看省份");
 }
 
+// About: what this firmware is, on which board, talking to which services. No
+// interactive rows, so any tap outside the back chevron just returns.
+void drawAbout(DrawTarget& t, const SettingsUiState& state) {
+  header(t, state, "关于");
+  const Settings& s = *state.settings;
+
+  heading(t, L::margin, 190, "x4-weather", TextAlign::Left, 400);
+  body(t, L::margin, 236, state.aboutBoard != nullptr ? state.aboutBoard : "PaperS3", TextAlign::Left, 400);
+  if (state.aboutVersion != nullptr) {
+    body(t, L::rightEdge - 200, 236, state.aboutVersion, TextAlign::Right, 200);
+  }
+  dashRule(t, 282);
+
+  struct Row {
+    const char* label;
+    const char* value;
+  };
+  const Row rows[] = {
+      {"网络", s.wifiSsid[0] != '\0' ? s.wifiSsid : "未配置"},
+      {"城市", s.place[0] != '\0' ? s.place : s.city},
+      {"刷新间隔", settingsRefreshLabel(s.refreshMinutes)},
+      {"数据源", "Open-Meteo / CoinLore"},
+      {"固件编译", state.aboutBuild != nullptr ? state.aboutBuild : "—"},
+      {"上游", state.aboutUpstream != nullptr ? state.aboutUpstream : "freeink-sdk"},
+  };
+  int16_t baseline = 350;
+  for (const Row& row : rows) {
+    body(t, L::margin, baseline, row.label, TextAlign::Left, 200);
+    body(t, static_cast<int16_t>(L::margin + 210), baseline, row.value, TextAlign::Right,
+         static_cast<int16_t>(L::rightEdge - L::margin - 210));
+    baseline = static_cast<int16_t>(baseline + 78);
+  }
+
+  footer(t, state, "点任意处返回", "喵～");
+}
+
 void drawCoins(DrawTarget& t, const SettingsUiState& state) {
   header(t, state, "自选币种");
   const uint8_t mask = state.settings->coinMask;
@@ -588,6 +626,7 @@ const char* settingsScreenTitle(SettingsScreen screen) {
     case SettingsScreen::Coins: return "自选币种";
     case SettingsScreen::Interval: return "刷新间隔";
     case SettingsScreen::DefaultPage: return "默认页";
+    case SettingsScreen::About: return "关于";
     default: return "设置";
   }
 }
@@ -639,6 +678,9 @@ void renderSettingsScreen(freeink::ui::DrawTarget& target, const SettingsUiState
       break;
     case SettingsScreen::Coins:
       drawCoins(target, state);
+      break;
+    case SettingsScreen::About:
+      drawAbout(target, state);
       break;
     case SettingsScreen::Interval: {
       uint8_t selected = 4;

@@ -35,6 +35,9 @@
 #include "SettingsFlow.h"
 #include "SettingsStore.h"
 #include "TouchIdle.h"
+#if FREEINK_DEVICE_PAPERS3
+#include <Rtc.h>  // BM8563: keeps the wake times on the half hour
+#endif
 #include "WeatherClient.h"
 #include "WeatherUi.h"
 #include "config.h"
@@ -424,7 +427,66 @@ void holdLatchPinsForSleep() {
   }
 }
 
-[[noreturn]] void sleepFor(uint32_t minutes) {
+#if FREEINK_DEVICE_PAPERS3
+freeink::Rtc rtc;
+bool rtcReady = false;
+#endif
+
+// Writes the RTC from the SNTP-synced clock, so the clock the sleep alignment
+// reads stays right even though the ESP32's own timers are reset by deep sleep.
+void syncRtc() {
+#if FREEINK_DEVICE_PAPERS3
+  if (!rtcReady) return;
+  const time_t now = time(nullptr);
+  if (now < 1700000000) return;  // SNTP has not landed yet
+  struct tm local = {};
+  localtime_r(&now, &local);
+  freeink::Rtc::DateTime dt;
+  dt.year = static_cast<uint16_t>(local.tm_year + 1900);
+  dt.month = static_cast<uint8_t>(local.tm_mon + 1);
+  dt.day = static_cast<uint8_t>(local.tm_mday);
+  dt.hour = static_cast<uint8_t>(local.tm_hour);
+  dt.minute = static_cast<uint8_t>(local.tm_min);
+  dt.second = static_cast<uint8_t>(local.tm_sec);
+  dt.weekday = static_cast<uint8_t>(local.tm_wday);
+  if (rtc.set(dt)) {
+    Serial.printf("[weather] rtc set to %04u-%02u-%02u %02u:%02u\n", dt.year, dt.month, dt.day,
+                  dt.hour, dt.minute);
+  }
+#endif
+}
+
+// Sleep length that lands the next wake on a whole refresh boundary (:00 / :30),
+// measured on the RTC so successive cycles do not drift. Plain period otherwise.
+uint32_t alignedSleepSeconds(uint32_t fallbackSeconds) {
+#if FREEINK_DEVICE_PAPERS3
+  const uint32_t period = static_cast<uint32_t>(settings.refreshMinutes) * 60U;
+  if (!rtcReady || period == 0) return fallbackSeconds;
+  freeink::Rtc::DateTime dt;
+  if (!rtc.now(dt)) return fallbackSeconds;
+  struct tm tmValue = {};
+  tmValue.tm_year = dt.year - 1900;
+  tmValue.tm_mon = dt.month - 1;
+  tmValue.tm_mday = dt.day;
+  tmValue.tm_hour = dt.hour;
+  tmValue.tm_min = dt.minute;
+  tmValue.tm_sec = dt.second;
+  const time_t now = mktime(&tmValue);  // local time; TZ is set in setup()
+  if (now <= 0) return fallbackSeconds;
+  const uint32_t local = static_cast<uint32_t>(now);
+  const uint32_t next = (local / period + 1U) * period;
+  uint32_t seconds = next - local;
+  if (seconds < 20U) seconds = period;  // just missed the boundary
+  if (seconds > period + 60U) seconds = period + 60U;
+  Serial.printf("[weather] sleep aligned to the next %u min boundary: %u s\n",
+                static_cast<unsigned>(settings.refreshMinutes), static_cast<unsigned>(seconds));
+  return seconds;
+#else
+  return fallbackSeconds;
+#endif
+}
+
+[[noreturn]] void sleepForSeconds(uint32_t seconds) {
   const uint64_t wakeMask = buttonWakeMask();
   const bool wakeLow = !BoardConfig::ACTIVE.input.powerActiveHigh;
 
@@ -446,14 +508,14 @@ void holdLatchPinsForSleep() {
   holdLatchPinsForSleep();
   freeink::PowerManager::powerDownRailsForSleep();
 
-  const uint64_t sleepUs = static_cast<uint64_t>(minutes) * 60ULL * 1000000ULL;
+  const uint64_t sleepUs = static_cast<uint64_t>(seconds) * 1000000ULL;
   esp_sleep_enable_timer_wakeup(sleepUs);
   if (wakeMask != 0) {
     freeink::PowerManager::armWakeOnPins(wakeMask, wakeLow);
   }
 
-  Serial.printf("[weather] deep sleep %u min (wake mask 0x%llx, page %u, wake #%u)\n",
-                static_cast<unsigned>(minutes), static_cast<unsigned long long>(wakeMask),
+  Serial.printf("[weather] deep sleep %u s (wake mask 0x%llx, page %u, wake #%u)\n",
+                static_cast<unsigned>(seconds), static_cast<unsigned long long>(wakeMask),
                 static_cast<unsigned>(pageIndex), static_cast<unsigned>(wakeCount));
   Serial.flush();
 
@@ -489,6 +551,7 @@ uint32_t runCycle(bool isColdBoot) {
     // the forecast, then whatever extra data the visible page needs.
     ensureLocation();
     if (fetchWeather()) {
+      syncRtc();  // SNTP has set the ESP32 clock by now
       if (page == weather::Page::AirQuality) ensureAirQuality();
       if (page == weather::Page::Crypto) ensureCrypto();
     } else {
@@ -792,6 +855,11 @@ void setup() {
   setenv("TZ", WEATHER_TIMEZONE, 1);
   tzset();
 
+#if FREEINK_DEVICE_PAPERS3
+  rtcReady = rtc.begin();
+  Serial.printf("[weather] rtc %s\n", rtcReady ? "ready (BM8563)" : "not found");
+#endif
+
   const esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
   const char* causeText = "power-on/reset";
   if (cause == ESP_SLEEP_WAKEUP_TIMER) {
@@ -823,7 +891,7 @@ void setup() {
                                           display.getDisplayHeight(), display.getDisplayWidthBytes());
   if (target == nullptr) {
     Serial.println("[weather] out of memory for the display target");
-    sleepFor(settings.retryMinutes);
+    sleepForSeconds(settings.retryMinutes * 60U);
   }
   // Landscape-native 800x480 panel -> DisplayTarget defaults to Portrait, so the
   // UI lays out in a 480x800 logical frame that reads upright on the held-tall X4.
@@ -860,6 +928,11 @@ void setup() {
   }
 
   const uint32_t sleepMinutes = runCycle(coldBoot);
+  // A normal cycle sleeps to the next boundary; a retry keeps its short gap so a
+  // flaky network is not waited out for half an hour.
+  const uint32_t sleepSeconds =
+      sleepMinutes == settings.refreshMinutes ? alignedSleepSeconds(sleepMinutes * 60U)
+                                              : sleepMinutes * 60U;
 
 #if FREEINK_DEVICE_PAPERS3
   // There are no readable buttons on the PaperS3, so every wake opens a touch
@@ -903,12 +976,12 @@ void setup() {
   if (initialButton >= 0) interactiveSession(initialButton);
 #endif
 
-  sleepFor(sleepMinutes);
+  sleepForSeconds(sleepSeconds);
 }
 
 void loop() {
   // Unreachable in normal operation: every setup() ends in deep sleep. Kept so
   // the Arduino runtime links; if it ever runs, sleep instead of spinning at
   // full clock.
-  sleepFor(settings.retryMinutes);
+  sleepForSeconds(settings.retryMinutes * 60U);
 }

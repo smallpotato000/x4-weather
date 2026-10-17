@@ -223,6 +223,7 @@ bool renderSettingsVariant(const char* pageName, const char* out) {
       {"settings-coins", weather::SettingsScreen::Coins},
       {"settings-interval", weather::SettingsScreen::Interval},
       {"settings-page", weather::SettingsScreen::DefaultPage},
+      {"settings-about", weather::SettingsScreen::About},
   };
   weather::SettingsScreen screen = weather::SettingsScreen::Home;
   bool matched = false;
@@ -261,6 +262,10 @@ bool renderSettingsVariant(const char* pageName, const char* out) {
   weather::SettingsUiState state;
   state.screen = screen;
   state.settings = &settings;
+  state.aboutVersion = "v1.0.0";
+  state.aboutBoard = "M5Stack PaperS3";
+  state.aboutBuild = "Oct 17 2026 12:04";
+  state.aboutUpstream = "freeink-sdk · PR #140";
   state.networks = &networks;
   state.candidates = &candidates;
   state.batteryPercent = 82;

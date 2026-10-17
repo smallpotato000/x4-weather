@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "CityList.h"
+#include "config.h"
 #include "EInkDisplay.h"
 #include "InputManager.h"
 #include "SettingsStore.h"
@@ -59,6 +60,12 @@ void syncUi() {
   ui.batteryKnown = g->batteryKnown;
   ui.batteryPercent = g->batteryPercent;
   ui.confirmPowerOff = confirmOff;
+#if FREEINK_DEVICE_PAPERS3
+  ui.aboutVersion = WEATHER_VERSION;
+  ui.aboutBoard = BoardConfig::ACTIVE.name;
+  ui.aboutBuild = __DATE__ " " __TIME__;
+  ui.aboutUpstream = "freeink-sdk · PR #140";
+#endif
 
   switch (ui.screen) {
     case SettingsScreen::Password:
@@ -311,7 +318,7 @@ bool applyEditKey(const SettingsKey& key, char* buffer, size_t capacity) {
 
 void handleHome(const Point& p) {
   const int row = rowAt(p, L::rowsTop, L::rowHeight, 6);
-  const Rect power{L::margin, static_cast<int16_t>(L::rowsTop + 5 * L::rowHeight + 12),
+  const Rect power{L::margin, static_cast<int16_t>(L::rowsTop + 6 * L::rowHeight + 12),
                    static_cast<int16_t>(L::width - L::margin * 2), 92};
 
   if (inside(p, power.x, power.y, power.width, power.height)) {
@@ -348,6 +355,9 @@ void handleHome(const Point& p) {
       break;
     case 4:
       goTo(SettingsScreen::Coins);
+      break;
+    case 5:
+      goTo(SettingsScreen::About);
       break;
     default:
       repaint();
@@ -531,6 +541,7 @@ void goBack() {
     case SettingsScreen::Wifi:
     case SettingsScreen::City:
     case SettingsScreen::Coins:
+    case SettingsScreen::About:
     case SettingsScreen::Interval:
     case SettingsScreen::DefaultPage:
       clearStatus();

@@ -22,6 +22,7 @@ enum class SettingsScreen : uint8_t {
   Coins,
   Interval,
   DefaultPage,
+  About,
 };
 static constexpr uint8_t kSettingsScreenCount = 9;
 
@@ -49,6 +50,10 @@ struct SettingsUiState {
   bool secret = false;                     // mask `editing` (password)
   bool revealed = false;                   // "显示" toggle
   bool editingSsid = false;                // the field edits the network name
+  const char* aboutVersion = nullptr;      // "v1.0.0"; the About screen's strings
+  const char* aboutBoard = nullptr;        // board name
+  const char* aboutBuild = nullptr;        // build stamp
+  const char* aboutUpstream = nullptr;     // SDK / PR reference
   const char* primaryLabel = "连接";        // bottom-right key caption
   uint8_t selectedRow = 0;                 // highlighted row
   uint8_t keyboardLayer = 0;               // 0 lower, 1 upper, 2 digits/symbols

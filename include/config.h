@@ -35,6 +35,9 @@
 
 // Header label. Leave it empty ("") to use the name geocoding returns.
 #ifndef WEATHER_PLACE
+// Firmware version, shown on the settings About screen.
+#define WEATHER_VERSION "v1.0.0"
+
 #define WEATHER_PLACE "武汉"
 #endif
 
