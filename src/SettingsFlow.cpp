@@ -622,8 +622,15 @@ void runSettingsSession(SettingsFlowContext& context) {
           static_cast<float>(upY) / BoardConfig::ACTIVE.displayHeight);
       const int32_t dx = static_cast<int32_t>(upX) - downX;
       const int32_t dy = static_cast<int32_t>(upY) - downY;
-      const int32_t absDx = dx < 0 ? -dx : dx;
-      const int32_t absDy = dy < 0 ? -dy : dy;
+      // Logical-space deltas too: the panel's axes are swapped relative to the
+      // portrait frame, so panel dy is the screen's horizontal direction.
+      const Point downLogical = freeink::ui::touchToLogical(
+          context.target->deviceContext(), static_cast<float>(downX) / BoardConfig::ACTIVE.displayWidth,
+          static_cast<float>(downY) / BoardConfig::ACTIVE.displayHeight);
+      const int32_t logicalDx = static_cast<int32_t>(logical.x) - downLogical.x;
+      const int32_t logicalDy = static_cast<int32_t>(logical.y) - downLogical.y;
+      const int32_t absDx = logicalDx < 0 ? -logicalDx : logicalDx;
+      const int32_t absDy = logicalDy < 0 ? -logicalDy : logicalDy;
 
       Serial.printf("[settings] %s touch logical=(%d,%d) %u ms d=(%d,%d)\n",
                     settingsScreenTitle(ui.screen), static_cast<int>(logical.x),
@@ -639,7 +646,7 @@ void runSettingsSession(SettingsFlowContext& context) {
 
       // A vertical swipe pages the WiFi list; other screens ignore swipes.
       if (ui.screen == SettingsScreen::Wifi && absDy > 60 && absDy > absDx) {
-        changeWifiPage(dy < 0 ? 1 : -1);
+        changeWifiPage(logicalDy < 0 ? 1 : -1);
         continue;
       }
 

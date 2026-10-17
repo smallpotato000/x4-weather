@@ -218,7 +218,7 @@ void drawHeader(DrawTarget& target, const ScreenState& state) {
 #if FREEINK_DEVICE_PAPERS3
   {
     const BitmapRef gear{art::kGearBits, art::kGearWidth, art::kGearHeight, BitmapFormat::BW1, true};
-    target.bitmap(Rect{static_cast<int16_t>(kWidth - kMargin - 40), 14, art::kGearWidth, art::kGearHeight},
+    target.bitmap(Rect{static_cast<int16_t>(kWidth - kMargin - 40), 4, art::kGearWidth, art::kGearHeight},
                   gear, BitmapMode::Contain, Paint::solid(Color::White));
   }
 #endif
@@ -373,7 +373,7 @@ void drawNowPage(DrawTarget& target, const WeatherReport& report) {
   constexpr int16_t kTempBaseline = 342;
   constexpr int16_t kConditionBaseline = 402;
   constexpr int16_t kMetricsBaseline = 460;
-  constexpr bool kRuleAboveList = true;
+  constexpr bool kRuleAboveList = false;  // no divider here: the rows read fine without it
 #else
   constexpr Rect kIconRect{176, 128, 128, 128};
   constexpr int16_t kTempBaseline = 350;

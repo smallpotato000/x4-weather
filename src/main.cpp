@@ -774,8 +774,16 @@ TouchSessionResult interactiveTouchSession() {
           static_cast<float>(upY) / BoardConfig::ACTIVE.displayHeight);
       const int16_t logicalWidth = target->logicalWidth();
       const int16_t logicalHeight = target->logicalHeight();
-      const int32_t absDx = dx < 0 ? -dx : dx;
-      const int32_t absDy = dy < 0 ? -dy : dy;
+      // Classify the gesture in LOGICAL space: the panel is landscape while the
+      // frame is portrait, so raw panel dx/dy map to the other axis. Reading them
+      // as-is swapped paging and sorting.
+      const freeink::ui::Point downLogical = freeink::ui::touchToLogical(
+          target->deviceContext(), static_cast<float>(downX) / BoardConfig::ACTIVE.displayWidth,
+          static_cast<float>(downY) / BoardConfig::ACTIVE.displayHeight);
+      const int32_t logicalDx = static_cast<int32_t>(logical.x) - downLogical.x;
+      const int32_t logicalDy = static_cast<int32_t>(logical.y) - downLogical.y;
+      const int32_t absDx = logicalDx < 0 ? -logicalDx : logicalDx;
+      const int32_t absDy = logicalDy < 0 ? -logicalDy : logicalDy;
 
       bool repaint = false;
       if (held >= 2500 && absDx < 40 && absDy < 40) {
@@ -788,7 +796,7 @@ TouchSessionResult interactiveTouchSession() {
       } else if (absDy > 60 && absDy > absDx) {
         // Vertical swipe: on the crypto page it re-orders the rows.
         if (page == weather::Page::Crypto) {
-          const uint8_t step = dy < 0 ? 1 : weather::kCryptoSortCount - 1;
+          const uint8_t step = logicalDy < 0 ? 1 : weather::kCryptoSortCount - 1;
           cryptoSortIndex = static_cast<uint8_t>((cryptoSortIndex + step) % weather::kCryptoSortCount);
           Serial.printf("[weather] crypto sort: %s\n",
                         weather::cryptoSortName(static_cast<weather::CryptoSort>(cryptoSortIndex)));
@@ -797,7 +805,7 @@ TouchSessionResult interactiveTouchSession() {
           repaint = true;
         }
       } else if (absDx > 60) {
-        page = dx < 0 ? weather::nextPage(page) : weather::previousPage(page);
+        page = logicalDx < 0 ? weather::nextPage(page) : weather::previousPage(page);
         repaint = true;
       } else {
         // Tap: header strip opens settings, bottom strip closes the session, the
