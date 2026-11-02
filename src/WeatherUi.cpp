@@ -115,6 +115,9 @@ const char* pageName(Page page) {
 #endif
     case Page::Hourly: return "未来 12 小时";
     case Page::AirQuality: return "空气质量";
+#if FREEINK_DEVICE_PAPERS3
+    case Page::Calendar: return "日历";
+#endif
     case Page::Crypto: return "数字货币";
     default: return "";
   }
@@ -534,6 +537,94 @@ void drawAirQualityPage(DrawTarget& target, const WeatherReport& report) {
 
 void drawSparkline(DrawTarget& target, const CoinQuote& quote, const Rect& box);
 
+#if FREEINK_DEVICE_PAPERS3
+// Calendar: a month grid with today inverted. The month arrows are hit-tested
+// by main.cpp at the same coordinates drawn here (kCalLeftArrow/kCalRightArrow).
+void drawCalendarPage(DrawTarget& target, const ScreenState& state) {
+  struct tm now = {};
+  const time_t epoch = state.nowEpoch > 0 ? static_cast<time_t>(state.nowEpoch) : 0;
+  if (epoch != 0) {
+    localtime_r(&epoch, &now);
+  }
+
+  int16_t year = static_cast<int16_t>(now.tm_year + 1900);
+  int16_t month = static_cast<int16_t>(now.tm_mon);  // 0-11
+  if (state.calendarMonth >= 0) {
+    year = static_cast<int16_t>(2000 + state.calendarMonth / 12);
+    month = static_cast<int16_t>(state.calendarMonth % 12);
+  }
+
+  char title[24];
+  snprintf(title, sizeof(title), "%d 年 %d 月", static_cast<int>(year), static_cast<int>(month + 1));
+  drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, 0, 176, title, TextAlign::Center, kWidth,
+           Color::Black);
+
+  // Month arrows.
+  const int16_t arrowY = 152;
+  target.triangle(freeink::ui::Point{static_cast<int16_t>(kMargin + 4), static_cast<int16_t>(arrowY + 8)},
+                  freeink::ui::Point{static_cast<int16_t>(kMargin + 20), static_cast<int16_t>(arrowY - 8)},
+                  freeink::ui::Point{static_cast<int16_t>(kMargin + 20), static_cast<int16_t>(arrowY + 24)},
+                  Paint::solid(Color::Black));
+  target.triangle(freeink::ui::Point{static_cast<int16_t>(kWidth - kMargin - 4), static_cast<int16_t>(arrowY + 8)},
+                  freeink::ui::Point{static_cast<int16_t>(kWidth - kMargin - 20), static_cast<int16_t>(arrowY - 8)},
+                  freeink::ui::Point{static_cast<int16_t>(kWidth - kMargin - 20), static_cast<int16_t>(arrowY + 24)},
+                  Paint::solid(Color::Black));
+  constexpr int16_t kCalLeftArrow = 24;   // x range of the tap targets (main.cpp)
+  constexpr int16_t kCalRightArrow = 396;
+  (void)kCalLeftArrow;
+  (void)kCalRightArrow;
+
+  // Weekday header, Sunday first.
+  static const char* const kWeekdays[] = {"日", "一", "二", "三", "四", "五", "六"};
+  constexpr int16_t kGridLeft = 24;
+  constexpr int16_t kCellWidth = 62;
+  constexpr int16_t kGridTop = 258;
+  constexpr int16_t kCellHeight = 62;
+  for (uint8_t i = 0; i < 7; ++i) {
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody,
+             static_cast<int16_t>(kGridLeft + i * kCellWidth), 202, kWeekdays[i], TextAlign::Center,
+             kCellWidth, Color::Black);
+  }
+  drawDashedRule(target, 226, kMargin, kWidth - kMargin);
+
+  // First weekday of the displayed month, and its length.
+  struct tm first = {};
+  first.tm_year = year - 1900;
+  first.tm_mon = month;
+  first.tm_mday = 1;
+  first.tm_hour = 12;
+  const time_t firstEpoch = mktime(&first);
+  const int firstWeekday = firstEpoch > 0 ? static_cast<int>(first.tm_wday) : 0;
+  static const uint8_t kDaysInMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  uint8_t days = kDaysInMonth[month < 12 ? month : 0];
+  if (month == 1 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) days = 29;
+
+  const int today = (state.calendarMonth < 0 && epoch != 0) ? now.tm_mday : 0;
+  for (uint8_t day = 1; day <= days; ++day) {
+    const int slot = firstWeekday + day - 1;
+    const int16_t col = static_cast<int16_t>(slot % 7);
+    const int16_t row = static_cast<int16_t>(slot / 7);
+    const int16_t x = static_cast<int16_t>(kGridLeft + col * kCellWidth);
+    const int16_t y = static_cast<int16_t>(kGridTop + 20 + row * kCellHeight);
+    char label[4];
+    snprintf(label, sizeof(label), "%u", static_cast<unsigned>(day));
+    if (day == today) {
+      target.fill(Rect{static_cast<int16_t>(x + 8), static_cast<int16_t>(y - 24), 46, 40},
+                  Paint::solid(Color::Black), 8);
+      drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, x, y, label, TextAlign::Center,
+               kCellWidth, Color::White);
+    } else {
+      drawLine(target, freeink::ui::kNotoSansFont, kFontBody, x, y, label, TextAlign::Center, kCellWidth,
+               Color::Black);
+    }
+  }
+  if (epoch == 0) {
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 0, static_cast<int16_t>(kGridTop + 6 * kCellHeight + 46),
+             "等待对时…", TextAlign::Center, kWidth, Color::Black);
+  }
+}
+#endif  // FREEINK_DEVICE_PAPERS3
+
 void drawCryptoPage(DrawTarget& target, const ScreenState& state) {
   const WeatherReport& report = *state.report;
   drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, kMargin, 150, pageName(Page::Crypto),
@@ -707,6 +798,9 @@ void renderWeatherScreen(DrawTarget& target, const ScreenState& state) {
 #if FREEINK_DEVICE_PAPERS3
     case Page::Home:
       drawHomePage(target, state);
+      break;
+    case Page::Calendar:
+      drawCalendarPage(target, state);
       break;
 #endif
     case Page::Hourly:

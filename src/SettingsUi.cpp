@@ -644,8 +644,9 @@ void renderSettingsScreen(freeink::ui::DrawTarget& target, const SettingsUiState
                                                 "15 分钟", "30 分钟", "1 小时"};
   static const uint16_t kIntervalValues[] = {1, 5, 10, 15, 30, 60};
 #if FREEINK_DEVICE_PAPERS3
-  static const char* const kPageLabels[] = {"首页", "当前天气", "逐小时", "空气质量", "数字货币"};
-  static constexpr uint8_t kPageOptionCount = 5;
+  static const char* const kPageLabels[] = {"首页", "当前天气", "逐小时", "空气质量", "日历",
+                                            "数字货币"};
+  static constexpr uint8_t kPageOptionCount = 6;
 #else
   static const char* const kPageLabels[] = {"数字货币", "当前天气", "逐小时", "空气质量"};
   static constexpr uint8_t kPageOptionCount = 4;

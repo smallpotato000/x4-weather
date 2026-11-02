@@ -34,9 +34,10 @@ enum class Page : uint8_t {
   Now = 1,
   Hourly = 2,
   AirQuality = 3,
-  Crypto = 4,
+  Calendar = 4,
+  Crypto = 5,
 };
-static constexpr uint8_t kPageCount = 5;
+static constexpr uint8_t kPageCount = 6;
 #else
 enum class Page : uint8_t {
   Crypto = 0,
@@ -62,6 +63,8 @@ struct ScreenState {
   const char* hint = nullptr;    // footer hint; defaults to the paging hint
   bool busy = false;             // first fetch in flight -> placeholder screen
   bool interactive = false;      // buttons are live -> show the paging hint
+  int32_t nowEpoch = 0;          // local wall clock; the calendar reads this
+  int16_t calendarMonth = -1;    // months since 2000-01, -1 = the current month
 };
 
 // Repaints the full screen. The caller owns the panel refresh.

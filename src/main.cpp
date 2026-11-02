@@ -75,6 +75,9 @@ RTC_DATA_ATTR weather::GeoLocation cachedLocation;
 // row order is remembered the same way.
 RTC_DATA_ATTR uint8_t pageIndex = 0;
 RTC_DATA_ATTR uint8_t cryptoSortIndex = 0;
+#if FREEINK_DEVICE_PAPERS3
+int16_t calendarMonth = -1;  // months since 2000-01; -1 = follow today
+#endif
 
 // The EInkDisplay constructor still takes pins for source compatibility, but
 // begin() reads the active board profile (Xteink X4: SCLK 8 / MOSI 10 / CS 21 /
@@ -164,6 +167,10 @@ void paint(EInkDisplay::RefreshMode mode) {
   state.busy = !firstAttemptDone;
   state.interactive = sessionActive;
   state.cryptoSort = static_cast<weather::CryptoSort>(cryptoSortIndex);
+  state.nowEpoch = static_cast<int32_t>(client.epochNow());
+#if FREEINK_DEVICE_PAPERS3
+  state.calendarMonth = calendarMonth;
+#endif
   state.batteryKnown = batteryKnown;
   state.batteryPercent = batteryPercent;
   state.coinMask = settings.coinMask;
@@ -820,6 +827,33 @@ TouchSessionResult interactiveTouchSession() {
           lastActivity = 0;
           break;
         }
+#if FREEINK_DEVICE_PAPERS3
+        // The calendar draws its month arrows in the 480x800 layout frame; map the
+        // logical tap back into that frame before hit-testing them.
+        if (page == weather::Page::Calendar) {
+          const float fitX = static_cast<float>(logicalWidth) / 480.0f;
+          const float fitY = static_cast<float>(logicalHeight) / 800.0f;
+          const float fit = fitX < fitY ? fitX : fitY;
+          const float offsetX = (logicalWidth - 480.0f * fit) / 2.0f;
+          const float offsetY = (logicalHeight - 800.0f * fit) / 2.0f;
+          const float lx = (logical.x - offsetX) / fit;
+          const float ly = (logical.y - offsetY) / fit;
+          if (ly > 130.0f && ly < 200.0f && (lx < 110.0f || lx > 370.0f)) {
+            // First tap picks the shown month, then steps it.
+            const time_t now = client.epochNow();
+            if (calendarMonth < 0 && now > 0) {
+              struct tm local = {};
+              localtime_r(&now, &local);
+              calendarMonth = static_cast<int16_t>((local.tm_year + 1900) * 12 + local.tm_mon);
+            }
+            calendarMonth = static_cast<int16_t>(calendarMonth + (lx < 110.0f ? -1 : 1));
+            Serial.printf("[weather] calendar month -> %d\n", static_cast<int>(calendarMonth));
+            pageIndex = static_cast<uint8_t>(page);
+            paint(EInkDisplay::FAST_REFRESH);
+            continue;
+          }
+        }
+#endif
         const weather::Page before = page;
         page = logical.x < logicalWidth / 2 ? weather::previousPage(page) : weather::nextPage(page);
         Serial.printf("[weather] tap logical (%d,%d): page %u -> %u\n", static_cast<int>(logical.x),

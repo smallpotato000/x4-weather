@@ -364,6 +364,7 @@ int main(int argc, char** argv) {
   const bool hourlyPage = std::strcmp(pageName, "hourly") == 0;
 #if FREEINK_DEVICE_PAPERS3
   const bool homePage = std::strcmp(pageName, "home") == 0;  // PaperS3-only page
+  const bool calendarPage = std::strcmp(pageName, "calendar") == 0;
 #else
   const bool homePage = false;
 #endif
@@ -374,6 +375,9 @@ int main(int argc, char** argv) {
 #if FREEINK_DEVICE_PAPERS3
   if (homePage) {
     state.page = weather::Page::Home;
+  } else if (calendarPage) {
+    state.page = weather::Page::Calendar;
+    state.nowEpoch = 1791158400;  // 2026-10-05 12:00 local, fixed for the preview
   } else
 #endif
     state.page = hourlyPage ? weather::Page::Hourly
