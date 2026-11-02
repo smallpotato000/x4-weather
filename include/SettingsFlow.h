@@ -12,6 +12,7 @@
 #include <InputManager.h>
 #include <stdint.h>
 
+#include "Notes.h"
 #include "SettingsStore.h"
 #include "SettingsUi.h"
 
@@ -31,6 +32,7 @@ struct SettingsFlowContext {
   freeink::ui::DisplayTarget* target = nullptr;
   WeatherClient* client = nullptr;
   Settings* settings = nullptr;
+  NoteBook* notes = nullptr;
   WifiList* networks = nullptr;
   bool batteryKnown = true;
   uint8_t batteryPercent = 82;

@@ -208,19 +208,27 @@ void drawHome(DrawTarget& t, const SettingsUiState& state) {
   char coins[24];
   std::snprintf(coins, sizeof(coins), "%u 个", static_cast<unsigned>(settingsVisibleCoins(s.coinMask)));
 
+  const int16_t pitch = L::homeRowHeight;
   int16_t top = L::rowsTop;
-  valueRow(t, top, L::rowHeight, "网络", s.wifiSsid[0] != '\0' ? s.wifiSsid : "未配置");
-  top = static_cast<int16_t>(top + L::rowHeight);
-  valueRow(t, top, L::rowHeight, "城市", s.place[0] != '\0' ? s.place : s.city);
-  top = static_cast<int16_t>(top + L::rowHeight);
-  valueRow(t, top, L::rowHeight, "刷新间隔", interval);
-  top = static_cast<int16_t>(top + L::rowHeight);
-  valueRow(t, top, L::rowHeight, "默认页", settingsPageLabel(s.defaultPage));
-  top = static_cast<int16_t>(top + L::rowHeight);
-  valueRow(t, top, L::rowHeight, "自选币种", coins);
-  top = static_cast<int16_t>(top + L::rowHeight);
-  valueRow(t, top, L::rowHeight, "关于", state.aboutVersion != nullptr ? state.aboutVersion : "");
-  top = static_cast<int16_t>(top + L::rowHeight);
+  valueRow(t, top, pitch, "网络", s.wifiSsid[0] != '\0' ? s.wifiSsid : "未配置");
+  top = static_cast<int16_t>(top + pitch);
+  valueRow(t, top, pitch, "城市", s.place[0] != '\0' ? s.place : s.city);
+  top = static_cast<int16_t>(top + pitch);
+  valueRow(t, top, pitch, "刷新间隔", interval);
+  top = static_cast<int16_t>(top + pitch);
+  valueRow(t, top, pitch, "默认页", settingsPageLabel(s.defaultPage));
+  top = static_cast<int16_t>(top + pitch);
+  valueRow(t, top, pitch, "自选币种", coins);
+  top = static_cast<int16_t>(top + pitch);
+  {
+    char noteCount[24];
+    std::snprintf(noteCount, sizeof(noteCount), "%u 条",
+                  static_cast<unsigned>(state.notes != nullptr ? state.notes->count : 0));
+    valueRow(t, top, pitch, "便签", noteCount);
+  }
+  top = static_cast<int16_t>(top + pitch);
+  valueRow(t, top, pitch, "关于", state.aboutVersion != nullptr ? state.aboutVersion : "");
+  top = static_cast<int16_t>(top + pitch);
 
   const Rect power{L::margin, static_cast<int16_t>(top + 12), static_cast<int16_t>(L::width - L::margin * 2),
                    92};
@@ -422,6 +430,42 @@ void drawCityHits(DrawTarget& t, const SettingsUiState& state) {
 
 // About: what this firmware is, on which board, talking to which services. No
 // interactive rows, so any tap outside the back chevron just returns.
+// Notes list: up to six rows plus "新建便签"; the pad lives in NVS.
+void drawNotes(DrawTarget& t, const SettingsUiState& state) {
+  header(t, state, "便签");
+  const NoteBook* book = state.notes;
+  int16_t top = L::rowsTop;
+  if (book != nullptr) {
+    for (uint8_t i = 0; i < book->count && i < 6; ++i) {
+      char label[4];
+      std::snprintf(label, sizeof(label), "%u", static_cast<unsigned>(i + 1));
+      body(t, L::margin, static_cast<int16_t>(top + 46), label, TextAlign::Left, 24);
+      body(t, static_cast<int16_t>(L::margin + 30), static_cast<int16_t>(top + 46), book->notes[i].text,
+           TextAlign::Left, static_cast<int16_t>(L::width - L::margin * 2 - 60));
+      chevron(t, L::rightEdge - 22, static_cast<int16_t>(top + 38));
+      top = static_cast<int16_t>(top + 92);
+      if (i + 1 < book->count && i + 1 < 6) dashRule(t, static_cast<int16_t>(top - 20));
+    }
+  }
+  heading(t, L::margin, static_cast<int16_t>(top + 52), "新建便签", TextAlign::Left, 300);
+  chevron(t, L::rightEdge - 22, static_cast<int16_t>(top + 46));
+  footer(t, state, "点一条编辑 · 清空保存即删除", "8 条上限");
+}
+
+// Editor: a text field plus the same three-layer keyboard the password screen
+// uses. The primary key saves; saving an empty note removes it.
+void drawNoteEdit(DrawTarget& t, const SettingsUiState& state) {
+  header(t, state, "编辑便签");
+  const Rect field{L::margin, 140, static_cast<int16_t>(L::width - L::margin * 2), 88};
+  t.stroke(field, kInk, 3, 8);
+  const char* text = state.editing != nullptr ? state.editing : "";
+  body(t, field.x, static_cast<int16_t>(field.y + 56), text, TextAlign::Left,
+       static_cast<int16_t>(field.width - 20));
+  body(t, L::margin, 274, "清空后保存 = 删除这条", TextAlign::Left, 400);
+  drawKeyboard(t, state, state.primaryLabel != nullptr ? state.primaryLabel : "保存");
+  footer(t, state, "点键盘输入 · 清空保存即删除", "存好回列表", /*showStatus=*/false);
+}
+
 void drawAbout(DrawTarget& t, const SettingsUiState& state) {
   header(t, state, "关于");
   const Settings& s = *state.settings;
@@ -627,6 +671,8 @@ const char* settingsScreenTitle(SettingsScreen screen) {
     case SettingsScreen::Interval: return "刷新间隔";
     case SettingsScreen::DefaultPage: return "默认页";
     case SettingsScreen::About: return "关于";
+    case SettingsScreen::Notes: return "便签";
+    case SettingsScreen::NoteEdit: return "编辑便签";
     default: return "设置";
   }
 }
@@ -682,6 +728,12 @@ void renderSettingsScreen(freeink::ui::DrawTarget& target, const SettingsUiState
       break;
     case SettingsScreen::About:
       drawAbout(target, state);
+      break;
+    case SettingsScreen::Notes:
+      drawNotes(target, state);
+      break;
+    case SettingsScreen::NoteEdit:
+      drawNoteEdit(target, state);
       break;
     case SettingsScreen::Interval: {
       uint8_t selected = 4;

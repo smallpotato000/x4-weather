@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 
+#include "Notes.h"
 #include "SettingsStore.h"
 #include "WeatherData.h"  // GeoCandidates, CoinInfo
 
@@ -23,6 +24,8 @@ enum class SettingsScreen : uint8_t {
   Interval,
   DefaultPage,
   About,
+  Notes,
+  NoteEdit,
 };
 static constexpr uint8_t kSettingsScreenCount = 9;
 
@@ -54,6 +57,8 @@ struct SettingsUiState {
   const char* aboutBoard = nullptr;        // board name
   const char* aboutBuild = nullptr;        // build stamp
   const char* aboutUpstream = nullptr;     // SDK / PR reference
+  NoteBook* notes = nullptr;               // the memo pad (edited here)
+  uint8_t noteIndex = 0;                   // slot being edited
   const char* primaryLabel = "连接";        // bottom-right key caption
   uint8_t selectedRow = 0;                 // highlighted row
   uint8_t keyboardLayer = 0;               // 0 lower, 1 upper, 2 digits/symbols
@@ -112,6 +117,7 @@ struct SettingsLayout {
   static constexpr int16_t headerBottom = 104;
   static constexpr int16_t rowsTop = 140;
   static constexpr int16_t rowHeight = 104;
+  static constexpr int16_t homeRowHeight = 88;  // seven rows plus the power button
   static constexpr int16_t cityRowHeight = 96;  // the shortlist has eight rows
   static constexpr int16_t footerBaseline = 928;
   static constexpr int16_t rightEdge = width - margin;

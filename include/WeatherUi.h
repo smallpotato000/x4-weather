@@ -14,6 +14,7 @@
 #include <FreeInkUIDisplayTarget.h>
 
 #include "CjkGlyphSource.h"
+#include "Notes.h"
 #include "WeatherData.h"
 
 namespace weather {
@@ -35,9 +36,10 @@ enum class Page : uint8_t {
   Hourly = 2,
   AirQuality = 3,
   Calendar = 4,
-  Crypto = 5,
+  Notes = 5,
+  Crypto = 6,
 };
-static constexpr uint8_t kPageCount = 6;
+static constexpr uint8_t kPageCount = 7;
 #else
 enum class Page : uint8_t {
   Crypto = 0,
@@ -65,6 +67,7 @@ struct ScreenState {
   bool interactive = false;      // buttons are live -> show the paging hint
   int32_t nowEpoch = 0;          // local wall clock; the calendar reads this
   int16_t calendarMonth = -1;    // months since 2000-01, -1 = the current month
+  const NoteBook* notes = nullptr;  // the memo pad, read-only on the data pages
 };
 
 // Repaints the full screen. The caller owns the panel refresh.

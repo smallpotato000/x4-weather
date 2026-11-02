@@ -21,6 +21,7 @@
 
 #include "CjkGlyphSource.h"
 #include "ScaledDrawTarget.h"
+#include "Notes.h"
 #include "SettingsUi.h"
 #include "WeatherParse.h"
 #include "WeatherUi.h"
@@ -224,6 +225,8 @@ bool renderSettingsVariant(const char* pageName, const char* out) {
       {"settings-interval", weather::SettingsScreen::Interval},
       {"settings-page", weather::SettingsScreen::DefaultPage},
       {"settings-about", weather::SettingsScreen::About},
+      {"settings-notes", weather::SettingsScreen::Notes},
+      {"settings-note-edit", weather::SettingsScreen::NoteEdit},
   };
   weather::SettingsScreen screen = weather::SettingsScreen::Home;
   bool matched = false;
@@ -256,12 +259,18 @@ bool renderSettingsVariant(const char* pageName, const char* out) {
   weather::configureWeatherFonts(target, cjk);
 
   weather::Settings settings = demoSettings();
+  weather::NoteBook notes;
+  notes.count = 3;
+  std::snprintf(notes.notes[0].text, sizeof(notes.notes[0].text), "买猫粮（三文鱼味）");
+  std::snprintf(notes.notes[1].text, sizeof(notes.notes[1].text), "周五交报表，别忘了");
+  std::snprintf(notes.notes[2].text, sizeof(notes.notes[2].text), "换 WiFi 密码后要重新连");
   weather::WifiList networks = demoNetworks();
   weather::GeoCandidates candidates = demoCandidates();
 
   weather::SettingsUiState state;
   state.screen = screen;
   state.settings = &settings;
+  state.notes = &notes;
   state.aboutVersion = "v1.0.0";
   state.aboutBoard = "M5Stack PaperS3";
   state.aboutBuild = "Oct 17 2026 12:04";
@@ -275,6 +284,10 @@ bool renderSettingsVariant(const char* pageName, const char* out) {
   }
   if (screen == weather::SettingsScreen::Coins) {
     state.status = "至少保留 4 个币";
+  }
+  if (screen == weather::SettingsScreen::NoteEdit) {
+    state.editing = notes.notes[1].text;
+    state.primaryLabel = "保存";
   }
   if (screen == weather::SettingsScreen::Password) {
     state.editing = settings.wifiPassword;

@@ -33,6 +33,7 @@
 #include "CjkGlyphSource.h"
 #include "ScaledDrawTarget.h"
 #include "SettingsFlow.h"
+#include "Notes.h"
 #include "SettingsStore.h"
 #include "TouchIdle.h"
 #if FREEINK_DEVICE_PAPERS3
@@ -124,6 +125,7 @@ weather::GeoLocation location;
 weather::Settings settings;  // compile-time defaults overlaid with NVS
 #if FREEINK_DEVICE_PAPERS3
 weather::WifiList wifiNetworks;  // last scan, drawn by the settings UI
+weather::NoteBook noteBook;      // the memo pad (NVS)
 #endif
 bool haveReport = false;
 bool batteryKnown = false;
@@ -170,6 +172,7 @@ void paint(EInkDisplay::RefreshMode mode) {
   state.nowEpoch = static_cast<int32_t>(client.epochNow());
 #if FREEINK_DEVICE_PAPERS3
   state.calendarMonth = calendarMonth;
+  state.notes = &noteBook;
 #endif
   state.batteryKnown = batteryKnown;
   state.batteryPercent = batteryPercent;
@@ -990,6 +993,7 @@ void setup() {
     flow.client = &client;
     flow.settings = &settings;
     flow.networks = &wifiNetworks;
+    flow.notes = &noteBook;
     flow.batteryKnown = batteryKnown;
     flow.batteryPercent = batteryPercent;
     flow.hooks.applyLocation = &applyLocation;

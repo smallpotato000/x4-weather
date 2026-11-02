@@ -117,6 +117,7 @@ const char* pageName(Page page) {
     case Page::AirQuality: return "空气质量";
 #if FREEINK_DEVICE_PAPERS3
     case Page::Calendar: return "日历";
+    case Page::Notes: return "便签";
 #endif
     case Page::Crypto: return "数字货币";
     default: return "";
@@ -628,6 +629,43 @@ void drawCalendarPage(DrawTarget& target, const ScreenState& state) {
 }
 #endif  // FREEINK_DEVICE_PAPERS3
 
+#if FREEINK_DEVICE_PAPERS3
+// Notes: the pad read-only, newest first. Editing lives in the settings UI,
+// which also owns the keyboard; this page is for glancing at them.
+void drawNotesPage(DrawTarget& target, const ScreenState& state) {
+  drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, kMargin, 150, "便签", TextAlign::Left, 300,
+           Color::Black);
+
+  const NoteBook* book = state.notes;
+  if (book == nullptr || book->count == 0) {
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 0, 400, "还没有便签", TextAlign::Center, kWidth,
+             Color::Black);
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, 0, 444, "点齿轮 → 便签 新建", TextAlign::Center,
+             kWidth, Color::Black);
+    return;
+  }
+
+  int16_t baseline = 214;
+  for (uint8_t i = 0; i < book->count && i < 6; ++i) {
+    char label[4];
+    snprintf(label, sizeof(label), "%u", static_cast<unsigned>(i + 1));
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kMargin, baseline, label, TextAlign::Left, 24,
+             Color::Black);
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, static_cast<int16_t>(kMargin + 30), baseline,
+             book->notes[i].text, TextAlign::Left, static_cast<int16_t>(kWidth - kMargin * 2 - 30),
+             Color::Black);
+    baseline = static_cast<int16_t>(baseline + 76);
+    if (i + 1 < book->count && i + 1 < 6) drawDashedRule(target, static_cast<int16_t>(baseline - 48), kMargin, kWidth - kMargin);
+  }
+  if (book->count > 6) {
+    char more[24];
+    snprintf(more, sizeof(more), "还有 %u 条…", static_cast<unsigned>(book->count - 6));
+    drawLine(target, freeink::ui::kNotoSansFont, kFontBody, kMargin, static_cast<int16_t>(baseline + 6), more,
+             TextAlign::Left, 200, Color::Black);
+  }
+}
+#endif  // FREEINK_DEVICE_PAPERS3
+
 void drawCryptoPage(DrawTarget& target, const ScreenState& state) {
   const WeatherReport& report = *state.report;
   drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, kMargin, 150, pageName(Page::Crypto),
@@ -804,6 +842,9 @@ void renderWeatherScreen(DrawTarget& target, const ScreenState& state) {
       break;
     case Page::Calendar:
       drawCalendarPage(target, state);
+      break;
+    case Page::Notes:
+      drawNotesPage(target, state);
       break;
 #endif
     case Page::Hourly:

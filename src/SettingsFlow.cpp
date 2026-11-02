@@ -36,6 +36,8 @@ SettingsUiState ui;
 char passwordBuffer[65] = {0};
 char ssidBuffer[33] = {0};
 char cityQuery[40] = {0};
+char noteBuffer[kNoteLength + 1] = {0};
+uint8_t noteSlot = 0;
 char statusBuffer[80] = {0};
 GeoCandidates cityHits;
 bool sleeping = false;
@@ -60,6 +62,7 @@ void syncUi() {
   ui.batteryKnown = g->batteryKnown;
   ui.batteryPercent = g->batteryPercent;
   ui.confirmPowerOff = confirmOff;
+  ui.notes = g->notes;
 #if FREEINK_DEVICE_PAPERS3
   ui.aboutVersion = WEATHER_VERSION;
   ui.aboutBoard = BoardConfig::ACTIVE.name;
@@ -72,6 +75,11 @@ void syncUi() {
       ui.editing = ui.editingSsid ? ssidBuffer : passwordBuffer;
       ui.secret = !ui.editingSsid;
       ui.primaryLabel = ui.editingSsid ? "下一步" : "连接";
+      break;
+    case SettingsScreen::NoteEdit:
+      ui.editing = noteBuffer;
+      ui.secret = false;
+      ui.primaryLabel = "保存";
       break;
     case SettingsScreen::CitySearch:
       ui.editing = cityQuery;
@@ -317,8 +325,8 @@ bool applyEditKey(const SettingsKey& key, char* buffer, size_t capacity) {
 // --- screen handlers --------------------------------------------------------
 
 void handleHome(const Point& p) {
-  const int row = rowAt(p, L::rowsTop, L::rowHeight, 6);
-  const Rect power{L::margin, static_cast<int16_t>(L::rowsTop + 6 * L::rowHeight + 12),
+  const int row = rowAt(p, L::rowsTop, L::homeRowHeight, 7);
+  const Rect power{L::margin, static_cast<int16_t>(L::rowsTop + 7 * L::homeRowHeight + 12),
                    static_cast<int16_t>(L::width - L::margin * 2), 92};
 
   if (inside(p, power.x, power.y, power.width, power.height)) {
@@ -357,6 +365,9 @@ void handleHome(const Point& p) {
       goTo(SettingsScreen::Coins);
       break;
     case 5:
+      goTo(SettingsScreen::Notes);
+      break;
+    case 6:
       goTo(SettingsScreen::About);
       break;
     default:
@@ -478,6 +489,51 @@ void handleCityHits(const Point& p) {
   selectCity(label, candidate.name, candidate.latitude, candidate.longitude);
 }
 
+void handleNotes(const Point& p) {
+  NoteBook& book = *g->notes;
+  const int row = rowAt(p, L::rowsTop, 92, static_cast<uint8_t>(book.count + 1));
+  if (row < 0) {
+    repaint();
+    return;
+  }
+  if (row == book.count) {  // new note
+    addNote(book);
+    noteSlot = 0;
+    Serial.println("[settings] note: new");
+  } else {
+    noteSlot = static_cast<uint8_t>(row);
+  }
+  std::snprintf(noteBuffer, sizeof(noteBuffer), "%s", book.notes[noteSlot].text);
+  goTo(SettingsScreen::NoteEdit);
+}
+
+void handleNoteEdit(const Point& p) {
+  const SettingsKey* key = hitKeyboard(p, ui.keyboardLayer);
+  if (key == nullptr) {
+    repaint();
+    return;
+  }
+  if (!applyEditKey(*key, noteBuffer, sizeof(noteBuffer))) {  // primary = save
+    NoteBook& book = *g->notes;
+    if (noteSlot < book.count) {
+      std::snprintf(book.notes[noteSlot].text, sizeof(book.notes[0].text), "%s", noteBuffer);
+      if (noteEmpty(book.notes[noteSlot])) {
+        removeNote(book, noteSlot);
+        Serial.println("[settings] note: deleted");
+      } else {
+        Serial.printf("[settings] note %u saved (%u chars)\n", static_cast<unsigned>(noteSlot),
+                      static_cast<unsigned>(std::strlen(noteBuffer)));
+      }
+    }
+    saveNoteBook(book);
+    clearStatus();
+    ui.screen = SettingsScreen::Notes;
+    repaint(true);
+    return;
+  }
+  repaint();
+}
+
 void handleCoins(const Point& p) {
   const int row = rowAt(p, L::rowsTop, 92, kCoinCount);
   Settings& settings = *g->settings;
@@ -556,6 +612,11 @@ void goBack() {
         clearStatus();
         ui.screen = SettingsScreen::Wifi;
       }
+      break;
+    case SettingsScreen::NoteEdit:
+      ui.editing = noteBuffer;
+      ui.secret = false;
+      ui.primaryLabel = "保存";
       break;
     case SettingsScreen::CitySearch:
     case SettingsScreen::CityHits:
@@ -680,6 +741,12 @@ void runSettingsSession(SettingsFlowContext& context) {
           break;
         case SettingsScreen::Coins:
           handleCoins(logical);
+          break;
+        case SettingsScreen::Notes:
+          handleNotes(logical);
+          break;
+        case SettingsScreen::NoteEdit:
+          handleNoteEdit(logical);
           break;
         case SettingsScreen::Interval: {
           static const uint16_t kValues[] = {1, 5, 10, 15, 30, 60};
