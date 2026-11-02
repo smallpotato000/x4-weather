@@ -352,15 +352,18 @@ void drawHomePage(DrawTarget& target, const ScreenState& state) {
 
   // The sleeping cat: lower half, centred, ending clear of the footer. The art is
   // trimmed to its ink, so the placement numbers are the whole gap budget.
-  constexpr int16_t catHeight = static_cast<int16_t>(art::kCatHeight);
-  constexpr int16_t catY = static_cast<int16_t>(780 - 44 - catHeight);
-  constexpr int16_t catX = (kWidth - static_cast<int16_t>(art::kCatWidth)) / 2;
+  // Fixed height so the drawing can change shape without moving into the weather
+  // block above; Contain keeps the aspect ratio.
+  constexpr int16_t kCatDrawHeight = 236;
+  constexpr int16_t kCatDrawWidth = static_cast<int16_t>(
+      kCatDrawHeight * static_cast<int32_t>(art::kCatWidth) / static_cast<int32_t>(art::kCatHeight));
+  constexpr int16_t catY = static_cast<int16_t>(780 - 44 - kCatDrawHeight);
+  constexpr int16_t catX = (kWidth - kCatDrawWidth) / 2;
   const BitmapRef cat{art::kCatBits, art::kCatWidth, art::kCatHeight, BitmapFormat::BW1, true};
-  target.bitmap(Rect{catX, catY, art::kCatWidth, art::kCatHeight}, cat, BitmapMode::Contain,
+  target.bitmap(Rect{catX, catY, kCatDrawWidth, kCatDrawHeight}, cat, BitmapMode::Contain,
                 Paint::solid(Color::Black));
-  // Zzz in the empty band above the cat's back, clear of the weather lines.
-  drawLine(target, freeink::ui::kWeatherTitleFont, kFontTitle, static_cast<int16_t>(catX + 250),
-           static_cast<int16_t>(catY + 26), "Z z z", TextAlign::Left, 130, Color::Black);
+  // No Zzz: the reference pose reads as asleep on its own, and the band above the
+  // cat is already carrying the weather summary.
 }
 #endif  // FREEINK_DEVICE_PAPERS3
 

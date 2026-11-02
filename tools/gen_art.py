@@ -14,45 +14,40 @@ import pathlib
 from PIL import Image, ImageChops, ImageDraw
 
 OUT = pathlib.Path('include/ArtBits.h')
-CAT_W, CAT_H = 460, 300
+CAT_W, CAT_H = 460, 340
 GEAR_SIZE = 40
 
 
 def cat_image() -> Image.Image:
-    """A sleeping cat on its side: body stretched out, head resting on the front
-    paws, tail curled up over the back. Silhouette reads at a glance because the
-    head/paws break the outline on the left and the tail breaks it on the right."""
+    """Curled up in a ball, like the reference photo: the body is one round mass,
+    the head tucks down at the lower left with its ears up, and the tail sweeps
+    across the front, separated from the body by a thin paper line so the band
+    reads as an overlapping limb rather than more body."""
     img = Image.new('L', (CAT_W, CAT_H), 0)   # 0 = paper, 255 = ink
     d = ImageDraw.Draw(img)
 
-    # Body: a long loaf lying down.
-    d.ellipse([70, 120, 445, 268], fill=255)
-    # Haunch: a rounder back end.
-    d.ellipse([300, 96, 445, 262], fill=255)
-    # Head resting low, on the front paws.
-    d.ellipse([44, 140, 196, 274], fill=255)
-    # Ears.
-    d.polygon([(66, 168), (84, 110), (128, 158)], fill=255)
-    d.polygon([(126, 156), (172, 108), (186, 168)], fill=255)
-    # Front paws tucked under the chin: two soft ovals poking forward.
-    d.ellipse([30, 232, 120, 284], fill=255)
-    d.ellipse([88, 240, 172, 286], fill=255)
-    # Tail: a thick arc rising out of the haunch, up over the back, with the tip
-    # rounded off at the end of the arc so it reads as one limb.
-    # Curled up above the haunch, in the empty corner: a limb you can see.
-    d.arc([300, 26, 466, 132], start=150, end=320, fill=255, width=26)
-    d.ellipse([352, 20, 404, 72], fill=255)
+    # Body: the round curl.
+    d.ellipse([120, 20, 410, 310], fill=255)
+    # Head tucked low on the left, inside the curl.
+    d.ellipse([42, 168, 190, 312], fill=255)
+    # Ears, up and slightly back.
+    d.polygon([(64, 196), (86, 138), (126, 186)], fill=255)
+    d.polygon([(120, 184), (166, 140), (176, 200)], fill=255)
 
-    # Closed eyes: shallow arcs, cut back to paper.
-    d.arc([78, 186, 112, 214], start=20, end=160, fill=0, width=5)
-    d.arc([130, 184, 164, 212], start=20, end=160, fill=0, width=5)
+    # Tail: a thin paper line first (the separation), then the band outside it,
+    # sweeping from the right flank under the body to the head.
+    d.arc([124, 162, 392, 318], start=350, end=182, fill=0, width=6)
+    d.arc([114, 170, 402, 336], start=350, end=182, fill=255, width=28)
+    d.ellipse([104, 268, 156, 320], fill=255)   # rounded tail tip near the head
+
+    # Closed eye.
+    d.arc([70, 226, 106, 256], start=20, end=160, fill=0, width=5)
     # Nose + mouth.
-    d.polygon([(124, 222), (138, 222), (131, 230)], fill=0)
-    d.arc([118, 226, 145, 244], start=20, end=160, fill=0, width=4)
-    # Whiskers.
-    for dy in (-2, 8, 18):
-        d.line([(44, 232 + dy), (96, 226 + dy)], fill=0, width=4)
-        d.line([(158, 226 + dy), (206, 232 + dy)], fill=0, width=4)
+    d.polygon([(112, 264), (126, 264), (119, 272)], fill=0)
+    d.arc([106, 268, 134, 288], start=20, end=160, fill=0, width=4)
+    # Whiskers fanning out to the left.
+    for dy in (-4, 6, 16):
+        d.line([(34, 266 + dy), (92, 258 + dy)], fill=0, width=4)
     return img
 
 
