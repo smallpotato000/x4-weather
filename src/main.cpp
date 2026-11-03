@@ -901,6 +901,9 @@ void setup() {
   tzset();
 
 #if FREEINK_DEVICE_PAPERS3
+  // The memo pad lives in NVS; without this it starts empty on every boot.
+  weather::loadNoteBook(noteBook);
+  Serial.printf("[weather] notes loaded: %u\n", static_cast<unsigned>(noteBook.count));
   rtcReady = rtc.begin();
   Serial.printf("[weather] rtc %s\n", rtcReady ? "ready (BM8563)" : "not found");
 #endif

@@ -554,7 +554,8 @@ void drawCalendarPage(DrawTarget& target, const ScreenState& state) {
   int16_t year = static_cast<int16_t>(now.tm_year + 1900);
   int16_t month = static_cast<int16_t>(now.tm_mon);  // 0-11
   if (state.calendarMonth >= 0) {
-    year = static_cast<int16_t>(2000 + state.calendarMonth / 12);
+    // Same encoding main.cpp writes: months are counted as year * 12 + month.
+    year = static_cast<int16_t>(state.calendarMonth / 12);
     month = static_cast<int16_t>(state.calendarMonth % 12);
   }
 
@@ -603,7 +604,11 @@ void drawCalendarPage(DrawTarget& target, const ScreenState& state) {
   uint8_t days = kDaysInMonth[month < 12 ? month : 0];
   if (month == 1 && ((year % 4 == 0 && year % 100 != 0) || year % 400 == 0)) days = 29;
 
-  const int today = (state.calendarMonth < 0 && epoch != 0) ? now.tm_mday : 0;
+  // Highlight today whenever the *displayed* month is the current one, not only
+  // while browsing "now": stepping away and back must bring the marker with it.
+  const bool showingCurrentMonth =
+      epoch != 0 && year == static_cast<int16_t>(now.tm_year + 1900) && month == now.tm_mon;
+  const int today = showingCurrentMonth ? now.tm_mday : 0;
   for (uint8_t day = 1; day <= days; ++day) {
     const int slot = firstWeekday + day - 1;
     const int16_t col = static_cast<int16_t>(slot % 7);

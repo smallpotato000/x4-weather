@@ -76,10 +76,13 @@ void syncUi() {
       ui.secret = !ui.editingSsid;
       ui.primaryLabel = ui.editingSsid ? "下一步" : "连接";
       break;
+    case SettingsScreen::Notes:
+      clearStatus();
+      ui.screen = SettingsScreen::Home;
+      break;
     case SettingsScreen::NoteEdit:
-      ui.editing = noteBuffer;
-      ui.secret = false;
-      ui.primaryLabel = "保存";
+      clearStatus();
+      ui.screen = SettingsScreen::Notes;
       break;
     case SettingsScreen::CitySearch:
       ui.editing = cityQuery;
@@ -613,10 +616,13 @@ void goBack() {
         ui.screen = SettingsScreen::Wifi;
       }
       break;
+    case SettingsScreen::Notes:
+      clearStatus();
+      ui.screen = SettingsScreen::Home;
+      break;
     case SettingsScreen::NoteEdit:
-      ui.editing = noteBuffer;
-      ui.secret = false;
-      ui.primaryLabel = "保存";
+      clearStatus();
+      ui.screen = SettingsScreen::Notes;
       break;
     case SettingsScreen::CitySearch:
     case SettingsScreen::CityHits:
