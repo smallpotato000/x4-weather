@@ -904,6 +904,7 @@ void setup() {
   // The memo pad lives in NVS; without this it starts empty on every boot.
   weather::loadNoteBook(noteBook);
   Serial.printf("[weather] notes loaded: %u\n", static_cast<unsigned>(noteBook.count));
+  Serial.printf("[weather] build %s %s\n", __DATE__, __TIME__);
   rtcReady = rtc.begin();
   Serial.printf("[weather] rtc %s\n", rtcReady ? "ready (BM8563)" : "not found");
 #endif
