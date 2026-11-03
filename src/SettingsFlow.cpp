@@ -76,13 +76,11 @@ void syncUi() {
       ui.secret = !ui.editingSsid;
       ui.primaryLabel = ui.editingSsid ? "下一步" : "连接";
       break;
-    case SettingsScreen::Notes:
-      clearStatus();
-      ui.screen = SettingsScreen::Home;
-      break;
     case SettingsScreen::NoteEdit:
-      clearStatus();
-      ui.screen = SettingsScreen::Notes;
+      // syncUi only fills the editor; navigation belongs to goBack()/goTo().
+      ui.editing = noteBuffer;
+      ui.secret = false;
+      ui.primaryLabel = "保存";
       break;
     case SettingsScreen::CitySearch:
       ui.editing = cityQuery;
